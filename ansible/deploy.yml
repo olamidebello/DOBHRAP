@@ -1,0 +1,152 @@
+---
+- name: Deploy DOBHRAP business suite
+  hosts: dobhrap
+  become: true
+  vars:
+    app_root: /opt/dobhrap
+    domain: dobhrap.com
+    admin_email: admin@example.com
+    app_source: "{{ playbook_dir }}/.."
+  pre_tasks:
+    - name: Validate secure bootstrap configuration
+      ansible.builtin.assert:
+        that:
+          - admin_password is defined
+          - admin_password | length >= 14
+          - domain is match('^[A-Za-z0-9.-]+$')
+        fail_msg: Supply admin_password through Ansible Vault and a valid domain.
+      no_log: true
+  tasks:
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name: [python3, nginx, certbot, python3-certbot-nginx]
+        update_cache: true
+        state: present
+    - name: Create service account
+      ansible.builtin.user:
+        name: dobhrap
+        system: true
+        home: "{{ app_root }}"
+        shell: /usr/sbin/nologin
+    - name: Create app directory
+      ansible.builtin.file:
+        path: "{{ app_root }}"
+        state: directory
+        owner: root
+        group: dobhrap
+        mode: '0750'
+    - name: Create persistent database directory
+      ansible.builtin.file:
+        path: /var/lib/dobhrap
+        state: directory
+        owner: dobhrap
+        group: dobhrap
+        mode: '0700'
+    - name: Install application source
+      ansible.builtin.copy:
+        src: "{{ app_source }}/{{ item }}"
+        dest: "{{ app_root }}/{{ item }}"
+        owner: root
+        group: dobhrap
+        mode: '0640'
+      loop: [app.py, index.html]
+      notify: Restart DOBHRAP
+    - name: Install private service environment
+      ansible.builtin.copy:
+        dest: /etc/dobhrap.env
+        owner: root
+        mode: '0600'
+        content: |
+          DOBHRAP_DB=/var/lib/dobhrap/dobhrap.db
+          DOBHRAP_ADMIN_EMAIL={{ admin_email | to_json }}
+          DOBHRAP_ADMIN_PASSWORD={{ admin_password | to_json }}
+          DOBHRAP_SECURE_COOKIE=1
+      no_log: true
+      notify: Restart DOBHRAP
+    - name: Install service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dobhrap.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=DOBHRAP Business Suite
+          After=network.target
+          [Service]
+          User=dobhrap
+          Group=dobhrap
+          WorkingDirectory={{ app_root }}
+          EnvironmentFile=/etc/dobhrap.env
+          ExecStart=/usr/bin/python3 {{ app_root }}/app.py
+          Restart=on-failure
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          ReadWritePaths=/var/lib/dobhrap
+          UMask=0077
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart DOBHRAP
+    - name: Install nginx proxy snippet
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/dobhrap-upstream.conf
+        mode: '0644'
+        content: |
+          limit_req_zone $binary_remote_addr zone=dobhrap_login:10m rate=5r/m;
+    - name: Install domain configuration only on first deployment
+      ansible.builtin.copy:
+        dest: "/etc/nginx/sites-available/{{ domain }}"
+        force: false
+        mode: '0644'
+        content: |
+          server {
+            listen 80;
+            server_name {{ domain }};
+            client_max_body_size 100k;
+            location = /api/login {
+              limit_req zone=dobhrap_login burst=5 nodelay;
+              proxy_pass http://127.0.0.1:8080;
+              proxy_set_header Host $host;
+            }
+            location / {
+              proxy_pass http://127.0.0.1:8080;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+            }
+          }
+    - name: Enable domain
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ domain }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain }}"
+        state: link
+    - name: Validate nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+    - name: Start app
+      ansible.builtin.systemd:
+        name: dobhrap
+        enabled: true
+        state: started
+        daemon_reload: true
+    - name: Apply app changes
+      ansible.builtin.meta: flush_handlers
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: reloaded
+    - name: Issue or renew HTTPS certificate
+      ansible.builtin.command:
+        argv: [certbot, --nginx, --non-interactive, --agree-tos, --redirect, --keep-until-expiring, -m, "{{ admin_email }}", -d, "{{ domain }}"]
+      register: certificate
+      changed_when: "'no action taken' not in certificate.stdout"
+    - name: Verify application readiness
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/health
+        status_code: 200
+  handlers:
+    - name: Restart DOBHRAP
+      ansible.builtin.systemd:
+        name: dobhrap
+        state: restarted
+        daemon_reload: true
