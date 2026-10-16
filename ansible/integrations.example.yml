@@ -1,0 +1,16 @@
+# Copy outside the repository and encrypt with ansible-vault before adding secrets.
+admin_email: admin@example.com
+admin_password: REPLACE_WITH_A_STRONG_UNIQUE_PASSWORD
+domain: dobhrap.com
+plaid_env: sandbox
+plaid_client_id: ''
+plaid_secret: ''
+# Register the identical URI in Plaid. Institution OAuth support needs redirect/resume testing.
+plaid_redirect_uri: ''
+check_env: sandbox
+check_api_key: ''
+efile_gateway_url: ''
+efile_gateway_token: ''
+enable_live_banking: false
+enable_live_payroll: false
+enable_efile_transmission: false

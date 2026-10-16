@@ -2,16 +2,18 @@ import os, json, sqlite3, secrets, hashlib, hmac, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from http.cookies import SimpleCookie
 from pathlib import Path
+import advanced
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 def connect():
- c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+ c=sqlite3.connect(DB,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
 
 def password(p,s): return hashlib.scrypt(p.encode(),salt=bytes.fromhex(s),n=16384,r=8,p=1).hex()
 def init():
  Path(DB).parent.mkdir(parents=True,exist_ok=True)
  with connect() as c:
   c.executescript('''CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE, salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,module TEXT,data TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS accounts(code TEXT PRIMARY KEY,name TEXT,type TEXT); CREATE TABLE IF NOT EXISTS journals(id INTEGER PRIMARY KEY,memo TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS lines(id INTEGER PRIMARY KEY,journal_id INTEGER REFERENCES journals(id),account TEXT REFERENCES accounts(code),debit INTEGER,credit INTEGER); CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,user_id INTEGER,action TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);''')
+  advanced.initialize(c)
   for a in [('1000','Cash','asset'),('1100','Accounts receivable','asset'),('2000','Accounts payable','liability'),('3000','Equity','equity'),('4000','Sales','income'),('5000','Operating expense','expense'),('5100','Wages','expense')]: c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)',a)
   if not c.execute('SELECT 1 FROM users').fetchone():
    p=os.environ.get('DOBHRAP_ADMIN_PASSWORD',''); email=os.environ.get('DOBHRAP_ADMIN_EMAIL','admin@example.com')
@@ -37,11 +39,13 @@ class Handler(BaseHTTPRequestHandler):
   try:
    path=self.path.split('?')[0]; body={}
    if self.command=='GET' and path=='/':
-    b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
+    b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
+   if self.command=='GET' and path=='/advanced.js':
+    b=Path(__file__).with_name('advanced.js').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if path=='/health': self.reply(200,{'status':'ok'}); return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))
-    if size>100000: self.reply(413,{'error':'Request too large'}); return
+    if not 0<=size<=100000: self.reply(413,{'error':'Request too large'}); return
     body=json.loads(self.rfile.read(size) or b'{}')
    with connect() as c:
     if path=='/api/login' and self.command=='POST':
@@ -51,8 +55,11 @@ class Handler(BaseHTTPRequestHandler):
     cookies=SimpleCookie(self.headers.get('Cookie','')); token=cookies['session'].value if 'session' in cookies else ''; u=c.execute('SELECT users.*,sessions.csrf FROM users JOIN sessions ON users.id=sessions.user_id WHERE token=? AND expires>?',(token,int(time.time()))).fetchone()
     if not u:self.reply(401,{'error':'Sign in required'}); return
     if self.command=='POST' and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),u['csrf']): self.reply(403,{'error':'Invalid CSRF token'}); return
+    result=advanced.dispatch(path,self.command,body,c,u,post_journal)
+    if result is not None:
+     self.reply(200,result); return
     if path=='/api/me': self.reply(200,{'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':MODULES}); return
-    if path=='/api/logout': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
+    if path=='/api/logout' and self.command=='POST': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
     if self.command=='POST' and u['role']=='viewer': self.reply(403,{'error':'Read-only role'}); return
     if path=='/api/users' and self.command=='POST':
      if u['role']!='admin': self.reply(403,{'error':'Administrator required'}); return
@@ -76,12 +83,15 @@ class Handler(BaseHTTPRequestHandler):
      for k in ('amount','price','quantity','budget','hours','hourly_rate'):
       if k in data and (not data[k] or float(data[k])<0): raise ValueError(k+' must be nonnegative')
      if body.get('id'):
+      c.execute('BEGIN IMMEDIATE')
+      if advanced.record_locked(c,module,body['id']):raise advanced.ServiceError('Record is locked by an approved posting workflow',409)
       if c.execute('UPDATE records SET data=? WHERE id=? AND module=?',(json.dumps(data),int(body['id']),module)).rowcount!=1:raise ValueError('Record not found')
       result={'id':body['id']}
      else:result={'id':c.execute('INSERT INTO records(module,data) VALUES(?,?)',(module,json.dumps(data))).lastrowid}
     else:self.reply(404,{'error':'Not found'}); return
     if self.command=='POST': c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],path+' '+json.dumps(result)))
     self.reply(200,result)
+  except advanced.ServiceError as e:self.reply(e.status,{'error':str(e)})
   except (ValueError,KeyError,TypeError,sqlite3.IntegrityError) as e:self.reply(400,{'error':str(e)})
 if __name__=='__main__':
  init(); ThreadingHTTPServer(('127.0.0.1',int(os.environ.get('PORT','8080'))),Handler).serve_forever()

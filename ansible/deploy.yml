@@ -1,5 +1,5 @@
 ---
-- name: Deploy DOBHRAP business suite
+- name: Build, test, migrate and deploy DOBHRAP
   hosts: dobhrap
   become: true
   vars:
@@ -7,19 +7,32 @@
     domain: dobhrap.com
     admin_email: admin@example.com
     app_source: "{{ playbook_dir }}/.."
+    plaid_env: sandbox
+    check_env: sandbox
+    enable_live_banking: false
+    enable_live_payroll: false
+    enable_efile_transmission: false
   pre_tasks:
-    - name: Validate secure bootstrap configuration
+    - name: Validate deployment configuration
       ansible.builtin.assert:
         that:
           - admin_password is defined
           - admin_password | length >= 14
           - domain is match('^[A-Za-z0-9.-]+$')
-        fail_msg: Supply admin_password through Ansible Vault and a valid domain.
+          - plaid_env in ['sandbox', 'production']
+          - check_env in ['sandbox', 'production']
+          - not enable_live_banking or ((plaid_client_id | default('') | length > 0) and (plaid_secret | default('') | length > 0))
+          - not enable_live_payroll or (check_api_key | default('') | length > 0)
+          - not enable_efile_transmission or ((efile_gateway_url | default('') is match('^https://')) and (efile_gateway_token | default('') | length > 0))
+        fail_msg: Use Vault for credentials and configure each provider before enabling live operations.
       no_log: true
+    - name: Derive immutable source release ID
+      ansible.builtin.set_fact:
+        release_id: "{{ (lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
-        name: [python3, nginx, certbot, python3-certbot-nginx]
+        name: [python3, python3-venv, nginx, certbot, python3-certbot-nginx]
         update_cache: true
         state: present
     - name: Create service account
@@ -28,30 +41,52 @@
         system: true
         home: "{{ app_root }}"
         shell: /usr/sbin/nologin
-    - name: Create app directory
+    - name: Prepare release and persistent directories
       ansible.builtin.file:
-        path: "{{ app_root }}"
+        path: "{{ item.path }}"
         state: directory
-        owner: root
+        owner: "{{ item.owner }}"
         group: dobhrap
-        mode: '0750'
-    - name: Create persistent database directory
-      ansible.builtin.file:
-        path: /var/lib/dobhrap
-        state: directory
-        owner: dobhrap
-        group: dobhrap
-        mode: '0700'
-    - name: Install application source
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ app_root }}", owner: root, mode: '0750'}
+        - {path: "{{ app_root }}/releases", owner: root, mode: '0750'}
+        - {path: "{{ app_root }}/releases/{{ release_id }}", owner: root, mode: '0750'}
+        - {path: "{{ app_root }}/releases/{{ release_id }}/tests", owner: root, mode: '0750'}
+        - {path: /var/lib/dobhrap, owner: dobhrap, mode: '0700'}
+        - {path: /var/backups/dobhrap, owner: dobhrap, mode: '0700'}
+    - name: Copy versioned source
       ansible.builtin.copy:
         src: "{{ app_source }}/{{ item }}"
-        dest: "{{ app_root }}/{{ item }}"
+        dest: "{{ app_root }}/releases/{{ release_id }}/{{ item }}"
         owner: root
         group: dobhrap
         mode: '0640'
-      loop: [app.py, index.html]
-      notify: Restart DOBHRAP
-    - name: Install private service environment
+      loop: [app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py]
+    - name: Create isolated build environment and install pinned dependencies
+      ansible.builtin.pip:
+        requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
+        virtualenv: "{{ app_root }}/releases/{{ release_id }}/venv"
+        virtualenv_command: python3 -m venv
+    - name: Run release tests before activation
+      ansible.builtin.command:
+        argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", -m, unittest, discover, -s, tests, -v]
+        chdir: "{{ app_root }}/releases/{{ release_id }}"
+      changed_when: false
+    - name: Generate persistent encryption key once
+      ansible.builtin.command:
+        argv:
+          - "{{ app_root }}/releases/{{ release_id }}/venv/bin/python"
+          - -c
+          - "from cryptography.fernet import Fernet; import os; fd=os.open('/etc/dobhrap-encryption.key',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); os.write(fd,Fernet.generate_key()); os.close(fd)"
+        creates: /etc/dobhrap-encryption.key
+      no_log: true
+    - name: Read encryption key without logging
+      ansible.builtin.slurp:
+        src: /etc/dobhrap-encryption.key
+      register: encryption_key
+      no_log: true
+    - name: Install private runtime settings
       ansible.builtin.copy:
         dest: /etc/dobhrap.env
         owner: root
@@ -61,39 +96,90 @@
           DOBHRAP_ADMIN_EMAIL={{ admin_email | to_json }}
           DOBHRAP_ADMIN_PASSWORD={{ admin_password | to_json }}
           DOBHRAP_SECURE_COOKIE=1
+          DOBHRAP_ENCRYPTION_KEY={{ (encryption_key.content | b64decode) | to_json }}
+          PLAID_ENV={{ plaid_env }}
+          PLAID_CLIENT_ID={{ plaid_client_id | default('') | to_json }}
+          PLAID_SECRET={{ plaid_secret | default('') | to_json }}
+          PLAID_REDIRECT_URI={{ plaid_redirect_uri | default('') | to_json }}
+          DOBHRAP_ENABLE_LIVE_BANKING={{ '1' if enable_live_banking else '0' }}
+          CHECK_ENV={{ check_env }}
+          CHECK_API_KEY={{ check_api_key | default('') | to_json }}
+          DOBHRAP_ENABLE_LIVE_PAYROLL={{ '1' if enable_live_payroll else '0' }}
+          EFILE_GATEWAY_URL={{ efile_gateway_url | default('') | to_json }}
+          EFILE_GATEWAY_TOKEN={{ efile_gateway_token | default('') | to_json }}
+          DOBHRAP_ENABLE_EFILE_TRANSMISSION={{ '1' if enable_efile_transmission else '0' }}
       no_log: true
       notify: Restart DOBHRAP
-    - name: Install service
+    - name: Stop background processing during migration
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop: [dobhrap-worker.timer, dobhrap-worker.service]
+      failed_when: false
+    - name: Save pre-migration database snapshot if present
+      ansible.builtin.command:
+        argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", "{{ app_root }}/releases/{{ release_id }}/backup.py"]
+      environment:
+        DOBHRAP_DB: /var/lib/dobhrap/dobhrap.db
+      become_user: dobhrap
+      changed_when: false
+    - name: Activate tested source atomically
+      ansible.builtin.file:
+        src: "{{ app_root }}/releases/{{ release_id }}"
+        dest: "{{ app_root }}/current"
+        state: link
+      notify: Restart DOBHRAP
+    - name: Install restricted service units
       ansible.builtin.copy:
-        dest: /etc/systemd/system/dobhrap.service
+        dest: "/etc/systemd/system/{{ item.name }}.service"
         mode: '0644'
         content: |
           [Unit]
-          Description=DOBHRAP Business Suite
+          Description={{ item.description }}
           After=network.target
           [Service]
+          Type={{ item.type }}
           User=dobhrap
           Group=dobhrap
-          WorkingDirectory={{ app_root }}
+          WorkingDirectory={{ app_root }}/current
           EnvironmentFile=/etc/dobhrap.env
-          ExecStart=/usr/bin/python3 {{ app_root }}/app.py
-          Restart=on-failure
+          ExecStart={{ app_root }}/current/venv/bin/python {{ app_root }}/current/{{ item.script }}
+          {{ item.restart }}
           NoNewPrivileges=true
           ProtectSystem=strict
           ProtectHome=true
           PrivateTmp=true
-          ReadWritePaths=/var/lib/dobhrap
+          ReadWritePaths=/var/lib/dobhrap /var/backups/dobhrap
           UMask=0077
           [Install]
           WantedBy=multi-user.target
+      loop:
+        - {name: dobhrap, description: DOBHRAP web service, type: simple, script: app.py, restart: 'Restart=on-failure'}
+        - {name: dobhrap-worker, description: DOBHRAP approval job worker, type: oneshot, script: worker.py, restart: 'TimeoutStartSec=180'}
+        - {name: dobhrap-backup, description: DOBHRAP database backup, type: oneshot, script: backup.py, restart: 'TimeoutStartSec=180'}
       notify: Restart DOBHRAP
-    - name: Install nginx proxy snippet
+    - name: Install background timers
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}.timer"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description={{ item.name }} schedule
+          [Timer]
+          {{ item.schedule | join('\n') }}
+          Unit={{ item.name }}.service
+          [Install]
+          WantedBy=timers.target
+      loop:
+        - {name: dobhrap-worker, schedule: ['OnUnitInactiveSec=60s', 'OnBootSec=60s']}
+        - {name: dobhrap-backup, schedule: ['OnCalendar=daily', 'Persistent=true']}
+    - name: Install nginx login throttling
       ansible.builtin.copy:
         dest: /etc/nginx/conf.d/dobhrap-upstream.conf
         mode: '0644'
         content: |
           limit_req_zone $binary_remote_addr zone=dobhrap_login:10m rate=5r/m;
-    - name: Install domain configuration only on first deployment
+    - name: Install domain configuration on first deployment
       ansible.builtin.copy:
         dest: "/etc/nginx/sites-available/{{ domain }}"
         force: false
@@ -110,6 +196,7 @@
             }
             location / {
               proxy_pass http://127.0.0.1:8080;
+              proxy_read_timeout 180s;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-Proto $scheme;
             }
@@ -122,25 +209,26 @@
     - name: Validate nginx
       ansible.builtin.command: nginx -t
       changed_when: false
-    - name: Start app
+    - name: Apply service updates and run automatic schema migrations at startup
+      ansible.builtin.meta: flush_handlers
+    - name: Enable services and timers
       ansible.builtin.systemd:
-        name: dobhrap
+        name: "{{ item }}"
         enabled: true
         state: started
         daemon_reload: true
-    - name: Apply app changes
-      ansible.builtin.meta: flush_handlers
+      loop: [dobhrap, dobhrap-worker.timer, dobhrap-backup.timer]
     - name: Reload nginx
       ansible.builtin.systemd:
         name: nginx
         enabled: true
         state: reloaded
-    - name: Issue or renew HTTPS certificate
+    - name: Provision HTTPS
       ansible.builtin.command:
         argv: [certbot, --nginx, --non-interactive, --agree-tos, --redirect, --keep-until-expiring, -m, "{{ admin_email }}", -d, "{{ domain }}"]
       register: certificate
       changed_when: "'no action taken' not in certificate.stdout"
-    - name: Verify application readiness
+    - name: Verify readiness
       ansible.builtin.uri:
         url: http://127.0.0.1:8080/health
         status_code: 200
