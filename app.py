@@ -40,6 +40,8 @@ class Handler(BaseHTTPRequestHandler):
    path=self.path.split('?')[0]; body={}
    if self.command=='GET' and path=='/':
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
+   if self.command=='GET' and path=='/assets/dobhrap-logo.jpg':
+    b=Path(__file__).with_name('assets').joinpath('dobhrap-logo.jpg').read_bytes(); self.send_response(200); self.send_header('Content-Type','image/jpeg'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path=='/advanced.js':
     b=Path(__file__).with_name('advanced.js').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if path=='/health': self.reply(200,{'status':'ok'}); return

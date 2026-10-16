@@ -26,9 +26,16 @@
           - not enable_efile_transmission or ((efile_gateway_url | default('') is match('^https://')) and (efile_gateway_token | default('') | length > 0))
         fail_msg: Use Vault for credentials and configure each provider before enabling live operations.
       no_log: true
+    - name: Hash branding asset on controller
+      ansible.builtin.stat:
+        path: "{{ app_source }}/assets/dobhrap-logo.jpg"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: branding_asset
     - name: Derive immutable source release ID
       ansible.builtin.set_fact:
-        release_id: "{{ (lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py')) | hash('sha256') }}"
+        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
@@ -52,6 +59,7 @@
         - {path: "{{ app_root }}", owner: root, mode: '0750'}
         - {path: "{{ app_root }}/releases", owner: root, mode: '0750'}
         - {path: "{{ app_root }}/releases/{{ release_id }}", owner: root, mode: '0750'}
+        - {path: "{{ app_root }}/releases/{{ release_id }}/assets", owner: root, mode: '0750'}
         - {path: "{{ app_root }}/releases/{{ release_id }}/tests", owner: root, mode: '0750'}
         - {path: /var/lib/dobhrap, owner: dobhrap, mode: '0700'}
         - {path: /var/backups/dobhrap, owner: dobhrap, mode: '0700'}
@@ -62,7 +70,7 @@
         owner: root
         group: dobhrap
         mode: '0640'
-      loop: [app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py]
+      loop: [assets/dobhrap-logo.jpg, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py]
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
