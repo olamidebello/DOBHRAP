@@ -43,6 +43,7 @@ const assert=require('assert');
   await page.locator('#analyst-compile').click();
   await page.locator('[data-analyst-return]').first().waitFor();
   await page.locator('[data-analyst-return]').first().click();
+  await page.locator('[data-tax-open]').nth(1).waitFor();
   assert.equal(await page.locator('[data-tax-open]').count(),2);
   await page.locator('#nav [data-page=customers]').click();
   await page.locator('#new').click();
