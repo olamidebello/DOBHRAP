@@ -33,7 +33,7 @@ STEPS=[
  {'key':'deductions','title':'Deductions worksheet','fields':[field('method','Deduction approach','select',True,['standard','itemized','unsure']),field('mortgage_interest','Mortgage interest (USD)','money'),field('state_local_tax','State/local/property taxes (USD)','money'),field('cash_charity','Cash charitable gifts (USD)','money'),field('noncash_charity','Noncash gifts (USD)','money'),field('medical','Medical expenses (USD)','money'),field('student_loan_interest','Student loan interest (USD)','money'),field('ira','IRA contributions (USD)','money'),field('hsa','HSA contributions (USD)','money'),field('notes','Supporting deduction notes','textarea')],'help':'Entered expenses are not automatically deductible. Limits, AGI floors, eligibility, charitable rules and adjustments are not applied. Do not subtract payroll contributions again if already excluded from W-2 box 1.'},
  {'key':'credits','title':'Credits and additional deductions','fields':[field('children','Child/dependent tax breaks?','select',True,YES),field('childcare','Dependent care expenses?','select',True,YES),field('education','Education expenses?','select',True,YES),field('earned_income','Review earned income credit?','select',True,YES),field('energy','Energy-related credit questions?','select',True,YES),field('marketplace_health','Form 1095-A / marketplace insurance?','select',True,YES),field('tips','Tips deduction questions?','select',True,YES),field('overtime','Overtime deduction questions?','select',True,YES),field('car_loan','Car-loan interest deduction questions?','select',True,YES),field('notes','Credit and deduction details for review','textarea')],'help':'2026 eligibility and phaseouts require review. This interview does not calculate credits, premium-tax reconciliation, or new special deductions.'},
  {'key':'states','title':'State tax information','repeat':True,'limit':10,'fields':[field('state','State / territory code',required=True),field('residency','Residency','select',True,['resident','part_year','nonresident']),field('from_date','Residency start','date'),field('to_date','Residency end','date'),field('income','State income (USD)','money'),field('withholding','State withholding (USD)','money'),field('payments','State estimated payments (USD)','money'),field('notes','Moves, adjustments and other state notes','textarea')],'help':'State questionnaires are intake only. No state liability, refund, forms or state e-filing is produced.'},
- {'key':'payments','title':'Payments and prior-year references','fields':[field('estimated','Federal estimated tax payments (USD)','money'),field('extension','Federal extension payment (USD)','money'),field('prior_credit','Prior-year overpayment applied (USD)','money'),field('prior_agi','Prior-year AGI reference (USD)','signed_money'),field('refund_choice','Preferred refund delivery for preparer review','select',False,['undecided','paper_check','provider_direct_deposit']),field('notes','Payment references and review notes','textarea')],'help':'Do not enter bank account numbers or e-file PINs here. No refund or balance due is calculated, and no payment is initiated.'},
+ {'key':'payments','title':'Payments and prior-year references','fields':[field('estimated','Federal estimated tax payments (USD)','money'),field('extension','Federal extension payment (USD)','money'),field('prior_credit','Prior-year overpayment applied (USD)','money'),field('prior_agi','Prior-year AGI reference (USD)','signed_money'),field('refund_choice','Preferred refund delivery for preparer review','select',False,['undecided','paper_check','provider_direct_deposit']),field('notes','Payment references and review notes','textarea')],'help':'Do not enter bank account numbers or e-file PINs here. A limited refund projection is available after supported optimization checks; no payment is initiated.'},
  {'key':'documents','title':'Documents and import review','fields':[],'help':'Upload PDF, JPG or PNG supporting documents (up to 2 MB each, 20 documents / 12 MB per return). Files are encrypted. Enter figures manually or import the supplied income CSV template; OCR and employer/broker imports are not implemented.'},
  {'key':'review','title':'Review your preparation','fields':[],'help':'Review missing fields and unsupported topics. Estimates are not a completed return, refund quote or accuracy guarantee. Never file this worksheet as Form 1040.'},
  {'key':'export','title':'Preview, export and next steps','fields':[],'help':'Download your encrypted-draft data as a redacted preparation JSON, print a worksheet, or request product support. Filing is unavailable from this interview; a validated provider package and authorization are required separately.'}
@@ -143,7 +143,44 @@ def review(data,completed):
   status=house['filing_status'];estimate=a.estimate_tax({'year':2026,'filing_status':'married_joint' if status=='qualifying_surviving_spouse' else status,'ordinary_income':str(Decimal(gross)/100)})
  return {'issues':issues,'unsupported':list(dict.fromkeys(unsupported)),'reported_income_cents':gross,'reported_withholding_cents':withholding,
          'business_subtotal_cents':sum(a.cents(x.get('receipts') or '0')-a.cents(x.get('expenses') or '0') for x in data.get('businesses',[])),
-         'estimate':estimate,'filing_ready':False,'notice':'Preparation worksheet only. No refund, balance due, complete federal/state liability, official return or e-file package is generated.'}
+         'estimate':estimate,'filing_ready':False,'notice':'Preparation worksheet only. Base subtotals do not establish a complete federal/state liability or refund. No official return or e-file package is generated.'}
+
+def refund_review(data,completed,confirm):
+ sources=[{'title':'IRS Publication 505: 2026 estimated tax','url':'https://www.irs.gov/publications/p505'}, {'title':'IRS 2026 non-itemizer charitable deduction','url':'https://www.irs.gov/pub/irs-pdf/p6196.pdf'},SOURCES[0]]
+ checklist=[
+  {'topic':'All income and payments','review':'Reconcile W-2/1099 gross income, withholding, estimated/extension payments and prior-year credits; exclude duplicate bank deposits.'},
+  {'topic':'Standard versus itemized deductions','review':'Compare only after mortgage, SALT, medical and charitable eligibility, limits and 2026 rules are established. Itemized calculations are not implemented here.'},
+  {'topic':'Family and earned-income credits','review':'Check dependent, residency, age, SSN, income and other eligibility conditions. Child, dependent-care, education, adoption and EITC calculations require additional preparation.'},
+  {'topic':'Retirement, HSA and student loans','review':'Check contribution eligibility, workplace-plan coverage, income limits and amounts already excluded from wages before deducting anything.'},
+  {'topic':'Self-employment and investments','review':'Review documented business allocation, depreciation, QBI, capital losses and carryforwards. These taxes and benefits are not computed here.'},
+  {'topic':'2026 special rules','review':'Review eligible tips, overtime, vehicle-loan and senior deductions and Marketplace insurance reconciliation. Do not assume prior-year energy credits remain available.'},
+  {'topic':'Eligible cash charity','review':'For 2026 non-itemizers, check eligible organization, actual cash payment, records and exclusions such as donor-advised funds. This limited single-filer projection caps verified qualifying cash at $1,000.'}]
+ result={'year':2026,'rules_version':'2026-projection-2026-10-17','reviewed_at':int(time.time()),'confirmations':{k:confirm.get(k) is True for k in ('verified_records','no_other_taxes_or_credits','charity_verified')},'scope':'Supported-scenario refund projection, not a guaranteed legal maximum or completed return','maximum_refund_verified':False,'checklist':checklist,'sources':sources,'projection':None,'blockers':[],
+ 'notice':'Uses 2026 estimated-tax rate schedules, not a final filed-return tax table. Unsupported credits, itemized deductions, state tax, special taxes, offsets and penalties are not calculated. Final liability/refund requires a complete validated return. AI does not decide eligibility or change calculated figures.'}
+ if confirm.get('verified_records') is not True or confirm.get('no_other_taxes_or_credits') is not True:
+  result['blockers'].append('Verify all income/payments, no duplicates, and that no additional taxes, credits or adjustments apply before requesting this limited projection.')
+ candidate=copy.deepcopy(data);deductions=candidate.get('deductions',{});cash=a.cents(deductions.get('cash_charity') or '0');allowed_cash=0
+ if cash:
+  if confirm.get('charity_verified') is True and deductions.get('method')=='standard':allowed_cash=min(cash,100000);deductions['cash_charity']='0.00'
+  else:result['blockers'].append('Verify qualified cash donations and supporting records before including the non-itemizer charitable deduction.')
+ checked=review(candidate,completed)
+ result['blockers']+=[x['message'] for x in checked['issues']]+checked['unsupported']
+ try:
+  birth=date.fromisoformat(data.get('personal',{}).get('birth_date',''));age=2026-birth.year
+  if not 25<=age<=64:result['blockers'].append('This projection supports ages 25–64 only; additional age-related rules require review.')
+ except ValueError:result['blockers'].append('Confirm the taxpayer date of birth.')
+ if checked['reported_income_cents']>=20000000:result['blockers'].append('Income at or above $200,000 requires additional tax checks outside this projection.')
+ if not checked['estimate'] or result['blockers']:return result
+ base=checked['estimate'];gross=checked['reported_income_cents'];pay=data.get('payments',{})
+ payments=checked['reported_withholding_cents']+sum(a.cents(pay.get(k) or '0') for k in ('estimated','extension','prior_credit'))
+ scenarios=[{'name':'Standard deduction','extra_deduction_cents':0,'tax_cents':base['ordinary_income_tax_cents']}]
+ if allowed_cash:
+  adjusted=a.estimate_tax({'year':2026,'filing_status':'single','ordinary_income':format(Decimal(max(0,gross-allowed_cash))/100,'.2f')})
+  scenarios.append({'name':'Standard deduction plus verified eligible cash charity','extra_deduction_cents':allowed_cash,'tax_cents':adjusted['ordinary_income_tax_cents']})
+ best=min(scenarios,key=lambda x:x['tax_cents']);delta=payments-best['tax_cents']
+ result['projection']={'scenarios':scenarios,'selected':best['name'],'reported_income_cents':gross,'payments_and_withholding_cents':payments,'estimated_federal_tax_cents':best['tax_cents'],
+ 'estimated_refund_cents':max(0,delta),'estimated_balance_due_cents':max(0,-delta),'supported_tax_savings_cents':base['ordinary_income_tax_cents']-best['tax_cents'],'standard_deduction_cents':base['standard_deduction_cents']}
+ return result
 
 def view(c,row,data):
  payload={**{k:row[k] for k in ('id','year','revision','step','status','created','updated')},'data':mask(data.get('data',{})),
@@ -151,7 +188,7 @@ def view(c,row,data):
  docs=[]
  for d in c.execute('SELECT * FROM tax_draft_documents WHERE return_id=? ORDER BY created',(row['id'],)):
   meta=a.unseal(d['payload']);docs.append({'id':d['id'],'name':meta['name'],'type':meta['type'],'size':d['size']})
- payload['documents']=docs;payload['ai_review']=data.get('ai_review',{});return payload
+ payload['documents']=docs;payload['ai_review']=data.get('ai_review',{});payload['refund_review']=data.get('refund_review',{});return payload
 
 def dispatch(path,method,body,c,user):
  if not path.startswith('/api/tax-prep/'):return None
@@ -184,9 +221,15 @@ def dispatch(path,method,body,c,user):
    status='worksheet_reviewed'
   rev=body.get('revision')
   if type(rev) is not int:raise a.ServiceError('Revision required')
+  if revised!=data or completed!=payload.get('completed',[]):payload.pop('refund_review',None)
   payload={**payload,'data':revised,'completed':list(dict.fromkeys(completed))}
   if c.execute('UPDATE tax_drafts SET payload=?,step=?,revision=revision+1,status=?,updated=? WHERE id=? AND owner=? AND revision=?',(a.seal(payload),step,status,int(time.time()),row['id'],user['id'],rev)).rowcount!=1:raise a.ServiceError('This return changed on another device. Reopen it before saving.',409)
   updated,_=read(c,row['id'],user);return view(c,updated,payload)
+ if route=='refund-review':
+  if body.get('revision')!=row['revision']:raise a.ServiceError('Reopen this changed draft first',409)
+  result=refund_review(data,payload.get('completed',[]),body);payload['refund_review']=result
+  if c.execute('UPDATE tax_drafts SET payload=?,revision=revision+1 WHERE id=? AND revision=?',(a.seal(payload),row['id'],row['revision'])).rowcount!=1:raise a.ServiceError('Draft changed during computation; reopen before reviewing',409)
+  a.audit(c,user['id'],'Supported refund optimization review');updated,_=read(c,row['id'],user);return view(c,updated,payload)
  if route=='record-preview':
   if user['role'] not in ('admin','super_admin'):raise a.ServiceError('Workspace administrator required to import business records',403)
   return {'items':record_preview(c),'notice':'Review source ownership, tax year and duplicate receipts. Workspace records are not automatically personal taxable income.'}
@@ -206,6 +249,7 @@ def dispatch(path,method,body,c,user):
     new_data.setdefault('businesses',[]).append({'_row_id':str(uuid.uuid4()),'name':'Imported expense: '+item['name'],'activity':'sole_proprietor','receipts':'0.00','expenses':item['amount'],'owners':'Imported workspace expense. Verify ownership, deductibility and duplicates; consolidate with the proper business before review.'})
    imports[item['key']]=item['hash'];count+=1
   new_data=clean(new_data,data);new_payload={**payload,'data':new_data,'imports':imports,'completed':[x for x in payload.get('completed',[]) if x not in ('income','businesses','review')]}
+  new_payload.pop('refund_review',None)
   if c.execute("UPDATE tax_drafts SET payload=?,revision=revision+1,status='draft',updated=? WHERE id=? AND owner=? AND revision=?",(a.seal(new_payload),int(time.time()),row['id'],user['id'],body.get('revision'))).rowcount!=1:raise a.ServiceError('Draft changed; reopen before importing',409)
   a.audit(c,user['id'],'Tax preparation source records imported '+str(count));updated,_=read(c,row['id'],user);return {**view(c,updated,new_payload),'imported':count}
  if route=='ai-review':
@@ -243,7 +287,7 @@ def dispatch(path,method,body,c,user):
   if not doc:raise a.ServiceError('Document not found',404)
   if route=='document-download':return a.unseal(doc['payload'])
   c.execute('DELETE FROM tax_draft_documents WHERE id=?',(doc['id'],));a.audit(c,user['id'],'Private tax document removed '+doc['id']);return {'ok':True}
- if route=='export':return {'kind':'2026 preparation worksheet — NOT FOR FILING','tax_year':2026,'data':mask(data),'review':review(data,payload.get('completed',[])),'sources':SOURCES}
+ if route=='export':return {'kind':'2026 preparation worksheet — NOT FOR FILING','tax_year':2026,'data':mask(data),'refund_review':payload.get('refund_review',{}),'review':review(data,payload.get('completed',[])),'sources':SOURCES}
  if route=='delete':
   if body.get('confirm')!='DELETE':raise a.ServiceError('Confirm DELETE to remove this preparation')
   c.execute('DELETE FROM tax_drafts WHERE id=? AND owner=?',(row['id'],user['id']));a.audit(c,user['id'],'Private tax preparation deleted '+row['id']);return {'ok':True}

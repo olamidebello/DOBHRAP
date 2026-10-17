@@ -20,7 +20,7 @@ def enforce(c,path,method,body,tenant,user):
  if path in ('/api/market/checkout','/api/coupons/redeem'):
   product=c.execute('SELECT service_code FROM market_products WHERE id=? AND active=1',(body.get('product_id'),)).fetchone()
   if not product or not re.fullmatch(r'tax_preparation_\d{4}',product['service_code']):raise a.ServiceError('Choose a tax preparation service for this account',403)
- gated=method=='POST' and (path in ('/api/tax-prep/create','/api/tax-prep/export','/api/tax-analyst/compile') or (path=='/api/tax-prep/save' and body.get('reviewed') is True))
+ gated=method=='POST' and (path in ('/api/tax-prep/create','/api/tax-prep/export','/api/tax-prep/refund-review','/api/tax-analyst/compile') or (path=='/api/tax-prep/save' and body.get('reviewed') is True))
  if gated:
   y=body.get('year') if path=='/api/tax-analyst/compile' else 2026
   if type(y) is not int or not 2000<=y<=2100:raise a.ServiceError('Choose a valid tax year')
