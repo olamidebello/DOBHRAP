@@ -162,3 +162,25 @@ Existing users and records remain in workspace 1. New workspaces use separate SQ
 Background processing visits every active workspace. Daily backups include the catalog/platform database and each tenant database in its own backup subdirectory. Restore the catalog and the appropriate tenant database snapshots together with the encryption key; each snapshot is individually consistent, and snapshots across workspaces are taken sequentially. Back up the entire tenant directory rather than only the main database.
 
 Platform Plaid, Check and e-filing credentials remain restricted to workspace 1. Newly registered tenants can use local accounting, HR, CSV banking, tax estimates and local invoice/bill approvals; their provider banking, payroll and e-filing operations stay disabled until tenant-specific provider onboarding is implemented. They cannot use or retrieve platform provider credentials.
+
+## Dashboard and navigation
+
+The workspace dashboard reads server-calculated posted revenue, expenses, net income, cash balance, operational invoice/bill totals, staff counts, tasks, leave, workflow/job queues and recent audit events. Financial statements show since-inception profit & loss and a balance sheet with current earnings separated from recorded equity. Operational record totals are never presented as payment settlement or posted financial balances.
+
+Grouped navigation covers overview, platform, sales/customers, purchasing/accounting, people/payroll, banking/tax, automation and administration. It includes module search (Ctrl/Cmd+K), per-user/per-workspace bookmarks, back/home/refresh/print tools, quick creation and role filtering. Record lists support view, edit, duplicate, search, numeric-aware sorting, pagination and CSV export with spreadsheet-formula protection. The tax organizer links return, income, deduction and document-reference screens. The capability catalog lists working workflows, record-only modules, provider integrations and unimplemented areas individually. It does not claim exact ADP, QuickBooks or TurboTax parity.
+
+## Super-admin deployment and commissioning GUI
+
+After one successful root Ansible deployment, **Super Admin → Deployment & commissioning** can queue readiness checks, all-workspace backups, deployment of the installed source, and recommissioning. `/api/platform/status` and `/api/platform/jobs` require a platform super administrator and POST requests require CSRF validation. A single active operation is allowed. There is no browser shell or arbitrary command execution endpoint.
+
+A root-owned `/opt/oob-control` source copy and `/opt/oob-control/admin-runner.py` implement a fixed allowlist of operations. `oob-admin.timer` invokes `oob-admin.service` every 30 seconds after its first invocation. Logs are private under `/var/log/oob-admin`; the GUI shows status and safe summaries. The broker validates the requesting role and canonical job ID again before dispatch. Interrupted operations are marked uncertain rather than retried automatically. Deployment can briefly stop the workspace service. This is privileged host administration: restrict super-admin accounts to trusted server operators.
+
+The GUI deploys the trusted source installed by Ansible, not arbitrary GitHub branches or unreviewed code. To install a new repository version, an operator still pulls the latest code and runs `ansible/repair-oob.yml`; this refreshes the trusted management source. Root installation of the broker is required before GUI management operations become available. The app process runs as `dobhrap-app` and cannot modify the broker source.
+
+## Mobile installation and Android preview
+
+`/downloads` is public and linked from sign-in and workspace navigation. It offers web-app installation with a manifest, app icons and a static-only service worker. Business API data is never cached. Android Chrome and iOS Safari provide their own installation menus when a direct installation prompt is unavailable. Business features require connectivity.
+
+The Android WebView project is in `mobile/`. The `Android preview APK` workflow builds and lints it using Java 17, Gradle 8.9 and Android Gradle Plugin 8.7.3, then publishes the APK to the `android-preview` prerelease. Its workflow runs on changes to `mobile/` or its workflow file, and can also be started manually in GitHub Actions. This is a debug-signed preview, not a production-signed or Play Store release. Signing for production, device testing, publishing and fully native behavior remain separate work. The preview uses a separate application ID and keeps the debug key in the Actions cache for preview upgrade continuity; cache eviction can require reinstalling the preview.
+
+The downloads page checks the published GitHub release before showing the APK link. A queued or failed build is never presented as a downloadable APK. External links open the device browser; provider OAuth and CSV downloads should be verified on the target device. The app is a live-site wrapper with the same account and tenant isolation as the browser.

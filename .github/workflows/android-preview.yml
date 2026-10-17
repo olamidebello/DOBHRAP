@@ -1,0 +1,46 @@
+name: Android preview APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['mobile/**', '.github/workflows/android-preview.yml']
+permissions:
+  contents: write
+concurrency:
+  group: android-preview
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: oob-android-preview-key-v1
+      - name: Build and lint preview APK
+        working-directory: mobile
+        run: gradle --no-daemon lintDebug assembleDebug
+      - name: Prepare downloadable APK
+        run: cp mobile/app/build/outputs/apk/debug/app-debug.apk OOB-Business-Android-Preview.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OOB-Business-Android-Preview
+          path: OOB-Business-Android-Preview.apk
+      - name: Publish explicitly labeled preview download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view android-preview >/dev/null 2>&1; then
+            gh release upload android-preview OOB-Business-Android-Preview.apk --clobber
+          else
+            gh release create android-preview OOB-Business-Android-Preview.apk --target "$GITHUB_SHA" --prerelease --title "OOB Business Android Preview" --notes "Android WebView test build signed with a debug key. Not a production-signed or Play Store release. Requires the live HTTPS website. Use the PWA for the browser installation option."
+          fi

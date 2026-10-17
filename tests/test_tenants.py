@@ -122,6 +122,50 @@ class TenantTests(unittest.TestCase):
         with sqlite3.connect(copies[0]) as c:
             self.assertEqual(c.execute('SELECT count(*) FROM records').fetchone()[0], 1)
 
+    def test_dashboard_and_statements_use_posted_workspace_ledger(self):
+        tid=self.register('ledger')
+        self.register('empty')
+        with app.tenant_connect(tid) as c:
+            app.post_journal(c,'Capital',[{'account':'1000','debit':50000,'credit':0},{'account':'3000','debit':0,'credit':50000}])
+            app.post_journal(c,'Sale',[{'account':'1000','debit':25000,'credit':0},{'account':'4000','debit':0,'credit':25000}])
+            app.post_journal(c,'Cost',[{'account':'5000','debit':5000,'credit':0},{'account':'1000','debit':0,'credit':5000}])
+        owner,csrf=self.login('ledger@example.com')
+        self.request('/api/records/invoices',{'name':'Operational invoice','amount':'123.45','due_date':'2020-01-01'},owner,csrf)
+        dashboard=self.request('/api/dashboard',client=owner)
+        self.assertEqual(dashboard['ledger']['net_income_cents'],20000)
+        self.assertEqual(dashboard['ledger']['cash_cents'],70000)
+        self.assertEqual(dashboard['record_totals_cents']['invoices'],12345)
+        self.assertEqual(dashboard['attention']['past_due_invoice_records'],1)
+        statement=self.request('/api/financial-statements',client=owner)
+        self.assertTrue(statement['balanced'])
+        self.assertEqual(statement['assets_cents'],70000)
+        other,_=self.login('empty@example.com')
+        self.assertEqual(self.request('/api/dashboard',client=other)['ledger']['revenue_cents'],0)
+        self.assertEqual(self.request('/api/financial-statements',client=other)['assets_cents'],0)
+
+    def test_management_queue_requires_platform_admin_and_fixed_operation(self):
+        self.register('ordinary')
+        customer,csrf=self.login('ordinary@example.com')
+        for path in ('/api/platform/status','/api/platform/jobs'):
+            with self.assertRaises(HTTPError) as error:self.request(path,client=customer)
+            self.assertEqual(error.exception.code,403)
+        owner,token=self.login('platform@example.com','platform-password-1234')
+        with self.assertRaises(HTTPError) as error:self.request('/api/platform/jobs',{'kind':'shell','command':'anything'},owner,token)
+        self.assertEqual(error.exception.code,400)
+        job=self.request('/api/platform/jobs',{'kind':'backup','command':'ignored'},owner,token)
+        self.assertEqual(job['state'],'queued')
+        with self.assertRaises(HTTPError) as error:self.request('/api/platform/jobs',{'kind':'backup'},owner,token)
+        self.assertEqual(error.exception.code,409)
+        state=self.request('/api/platform/status',client=owner)
+        self.assertEqual(state['jobs'][0]['kind'],'backup')
+        self.assertNotIn('command',state['jobs'][0])
+
+    def test_download_pages_and_install_assets_are_public(self):
+        for route in ('/downloads','/manifest.webmanifest','/service-worker.js','/workspace.js','/assets/app-icon-192.png'):
+            with self.public.open(self.base+route) as response:self.assertEqual(response.status,200)
+        with patch.object(app,'mobile_download',return_value={'apk_available':False,'apk_url':None}):
+            self.assertFalse(self.request('/api/mobile')['apk_available'])
+
     def test_duplicate_registration_does_not_allocate_another_workspace(self):
         self.register('unique')
         with self.assertRaises(HTTPError):

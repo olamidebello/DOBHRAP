@@ -1,0 +1,169 @@
+// Navigation and dashboard use the authenticated workspace APIs.
+let currentUserId=0,currentTenantId=1,pageTrail=[];
+const navGroups=[
+ ['Overview',['dashboard','capabilities']],
+ ['Platform',['super_admin','tenants','deployment']],
+ ['Sales & customers',['customers','products','invoices','projects']],
+ ['Purchases & accounting',['vendors','bills','expenses','journals','reports','financial_statements']],
+ ['People & payroll',['employees','time','leave','recruiting','benefits','performance','payroll','payroll_processing']],
+ ['Banking & tax',['bank_review','bank_connections','tax_returns','tax_documents','tax_income','tax_deductions','tax_calculator','tax_organizer','efile']],
+ ['Automation',['tasks','recurring','approvals','jobs']],
+ ['Administration',['users','integrations','downloads','help']]
+];
+const navLabels={dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
+function pageLabel(page){return navLabels[page]||title(page)}
+function isAdmin(){return ['admin','super_admin'].includes(userRole)}
+function availablePage(page){
+ if(['super_admin','tenants','deployment'].includes(page))return userRole==='super_admin';
+ if(['users','integrations','bank_connections','tax_calculator','payroll_processing','efile','approvals','jobs','recurring'].includes(page))return isAdmin();
+ if(page==='payroll'&&userRole==='viewer')return false;return !!modules[page]||['dashboard','journals','reports','financial_statements','tax_organizer','capabilities','downloads','payroll','help'].includes(page);
+}
+function shortcuts(){try{return JSON.parse(localStorage.getItem(`oob-shortcuts-${currentUserId}-${currentTenantId}`)||'[]').filter(availablePage)}catch{return []}}
+function navigationButton(page){return `<button type="button" data-page="${page}" title="${esc(pageLabel(page))}">${esc(pageLabel(page))}</button>`}
+function buildNavigation(me){
+ currentUserId=me.id;currentTenantId=me.tenant.id;
+ const saved=shortcuts();
+ document.querySelector('#nav').innerHTML='<label class="nav-search">Find a module<input id="nav-search" type="search" placeholder="Search navigation…" aria-label="Search navigation"></label>'+ (saved.length?`<details open><summary>Bookmarks</summary>${saved.map(navigationButton).join('')}</details>`:'')+navGroups.map(([name,pages])=>{pages=pages.filter(availablePage);return pages.length?`<details open data-nav-group><summary>${esc(name)}</summary>${pages.map(navigationButton).join('')}</details>`:''}).join('');
+ document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{document.body.classList.remove('nav-open');show(b.dataset.page)});
+ document.querySelector('#nav-search').oninput=e=>{const q=e.target.value.toLowerCase();document.querySelectorAll('[data-page]').forEach(b=>b.hidden=!b.textContent.toLowerCase().includes(q));document.querySelectorAll('[data-nav-group]').forEach(group=>{group.hidden=![...group.querySelectorAll('button')].some(b=>!b.hidden);if(q)group.open=true})};
+ document.querySelector('#workspace-tools').hidden=false;
+ document.querySelector('#account-summary').textContent=me.email+' · '+title(me.role);
+ document.querySelector('#quick-create').innerHTML='<option value="">+ Create…</option>'+(userRole==='viewer'?[]:['invoices','bills','customers','vendors','expenses','employees','tasks','projects']).map(p=>`<option value="${p}">${esc(title(p))}</option>`).join('');
+ document.querySelector('#quick-create').hidden=userRole==='viewer';
+}
+function wireWorkspaceActions(){
+ document.querySelector('#nav-toggle').onclick=()=>document.body.classList.toggle('nav-open');
+ document.querySelector('#go-home').onclick=()=>show('dashboard');
+ document.querySelector('#go-back').onclick=()=>{pageTrail.pop();const previous=pageTrail.pop();show(previous||'dashboard')};
+ document.querySelector('#refresh-page').onclick=()=>show(current);
+ document.querySelector('#print-page').onclick=()=>window.print();
+ document.querySelector('#bookmark-page').onclick=()=>{let saved=shortcuts();saved=saved.includes(current)?saved.filter(p=>p!==current):[...saved,current];localStorage.setItem(`oob-shortcuts-${currentUserId}-${currentTenantId}`,JSON.stringify(saved));api('me').then(me=>{buildNavigation(me);updatePageTools(current)}).catch(e=>message(e.message))};
+ document.querySelector('#quick-create').onchange=async e=>{const page=e.target.value;if(page){e.target.value='';await show(page);document.querySelector('#new')?.click()}};
+ document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();document.body.classList.add('nav-open');document.querySelector('#nav-search')?.focus()}if(e.key==='Escape')document.body.classList.remove('nav-open')});
+}
+function updatePageTools(page){
+ if(pageTrail.at(-1)!==page)pageTrail.push(page);
+ document.querySelector('#title').textContent=pageLabel(page);
+ document.querySelector('#breadcrumb').textContent=navGroups.find(([,pages])=>pages.includes(page))?.[0]||'Workspace';
+ document.querySelector('#bookmark-page').textContent=shortcuts().includes(page)?'Remove bookmark':'Bookmark';
+ document.querySelectorAll('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===page);if(b.dataset.page===page)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
+}
+const usd=cents=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(cents||0)/100);
+function downloadCsv(name,rows,keys){
+ const cell=value=>{let text=String(value??'');if(/^[=+@\-\t\r]/.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"'};
+ const csv=[keys.map(cell).join(','),...rows.map(row=>keys.map(key=>cell(row[key])).join(','))].join('\r\n');
+ const link=document.createElement('a');link.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+}
+function goButtons(root=content){root.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>show(b.dataset.go))}
+async function showDashboard(){
+ const d=await api('dashboard');
+ const cards=[['Posted revenue',usd(d.ledger.revenue_cents),'reports'],['Posted expenses',usd(d.ledger.expense_cents),'reports'],['Net income',usd(d.ledger.net_income_cents),'reports'],['Cash ledger balance',usd(d.ledger.cash_cents),'journals'],['Invoice record total',usd(d.record_totals_cents.invoices),'invoices'],['Bill record total',usd(d.record_totals_cents.bills),'bills'],['Employees',d.counts.employees||0,'employees'],['Open tasks',d.attention.open_tasks,'tasks']];
+ const attention=[['Invoice records with past due dates',d.attention.past_due_invoice_records,'invoices'],['Pending leave requests',d.attention.pending_leave,'leave']];
+ if(isAdmin())attention.push(['Awaiting independent approval',d.workflow_counts.pending_approval||0,'approvals'],['Queued jobs',d.job_counts.queued||0,'jobs'],['Jobs needing review',(d.job_counts.uncertain||0)+(d.job_counts.blocked||0),'jobs']);
+ content.innerHTML=`<div class="dashboard-heading"><div><h2>Business overview</h2><p class="muted">Current workspace · USD · ${esc(d.generated_at)}</p></div><button id="dashboard-export">Export dashboard CSV</button></div><div class="grid dashboard-metrics">${cards.map(([label,value,page])=>`<button class="card metric" data-go="${page}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>View ${esc(pageLabel(page))} →</small></button>`).join('')}</div><div class="dashboard-columns"><section><h2>Needs attention</h2>${attention.map(([label,count,page])=>`<button class="attention-row" data-go="${page}"><span>${esc(label)}</span><b>${count}</b><span aria-hidden="true">→</span></button>`).join('')}<p class="muted">Invoice dates and record totals do not track settlement. Financial balances above come from posted journals.</p></section><section><h2>Quick access</h2><div class="quick-links">${['customers','invoices','bills','expenses','employees','tasks','reports',...(isAdmin()?['approvals','bank_connections','recurring']:[])].map(page=>`<button data-go="${page}">${esc(pageLabel(page))}</button>`).join('')}</div><h3>Workspace activity</h3><p>${d.counts.customers||0} customers · ${d.counts.vendors||0} vendors · ${d.counts.projects||0} projects</p></section></div><section><h2>Posted financial activity — last six months</h2>${d.trend.length?'<div class="table-scroll"><table><thead><tr><th>Month</th><th>Revenue</th><th>Expenses</th><th>Net income</th></tr></thead><tbody>'+d.trend.map(row=>`<tr><td>${esc(row.month)}</td><td>${usd(row.revenue_cents)}</td><td>${usd(row.expense_cents)}</td><td>${usd(row.revenue_cents-row.expense_cents)}</td></tr>`).join('')+'</tbody></table></div>':'<p class="empty-state">Post your first balanced journal to populate financial activity.</p>'}</section><section><h2>Recent audit activity</h2>${d.recent_activity.length?table(d.recent_activity,['created','user_id','action']):'<p class="empty-state">No activity recorded in this workspace yet.</p>'}</section>`;
+ goButtons();document.querySelector('#dashboard-export').onclick=()=>downloadCsv('business-dashboard.csv',cards.map(([metric,value])=>({metric,value})),['metric','value']);
+}
+async function showRecords(page){
+ let rows=await api('records/'+page),fields=modules[page],pageNumber=1,sort=fields[0],direction=1,filtered=rows;
+ const canEdit=userRole!=='viewer';
+ content.innerHTML=`<section><header><div><h2>${esc(pageLabel(page))}</h2><p class="muted">${rows.length} records in this workspace</p></div><div>${canEdit?'<button id="new">+ New record</button> ':''}<button id="record-export">Export CSV</button></div></header><div class="record-tools"><label>Search<input id="search" type="search" placeholder="Search all fields"></label><label>Sort by<select id="record-sort">${fields.map(f=>`<option value="${f}">${esc(title(f))}</option>`).join('')}</select></label><button id="sort-direction" aria-label="Reverse sort order">Ascending ↑</button><label>Rows per page<select id="page-size"><option>10</option><option selected>25</option><option>50</option><option>100</option></select></label></div><div id="list" class="table-scroll"></div><footer class="list-footer"><span id="page-summary"></span><div><button id="previous-records">Previous</button> <button id="next-records">Next</button></div></footer></section><section id="editor" hidden></section>`;
+ function render(){const query=document.querySelector('#search').value.toLowerCase();filtered=rows.filter(row=>fields.some(f=>String(row[f]??'').toLowerCase().includes(query))).sort((a,b)=>String(a[sort]??'').localeCompare(String(b[sort]??''),undefined,{numeric:true})*direction);const size=Number(document.querySelector('#page-size').value),pages=Math.max(1,Math.ceil(filtered.length/size));pageNumber=Math.min(pageNumber,pages);const visible=filtered.slice((pageNumber-1)*size,pageNumber*size);document.querySelector('#list').innerHTML=visible.length?'<table><thead><tr>'+fields.map(f=>`<th>${esc(title(f))}</th>`).join('')+'<th>Actions</th></tr></thead><tbody>'+visible.map(row=>'<tr>'+fields.map(f=>`<td>${esc(row[f])}</td>`).join('')+`<td><button data-view="${row.id}">View</button>${canEdit?` <button data-edit="${row.id}">Edit</button> <button data-copy="${row.id}">Duplicate</button>`:''}</td></tr>`).join('')+'</tbody></table>':'<p class="empty-state">No matching records. '+(rows.length?'Change your search.':canEdit?'Choose New record to get started.':'Your workspace has no records yet.')+'</p>';document.querySelector('#page-summary').textContent=`Page ${pageNumber} of ${pages} · ${filtered.length} matching records`;document.querySelector('#previous-records').disabled=pageNumber===1;document.querySelector('#next-records').disabled=pageNumber===pages;document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>edit(rows.find(r=>r.id==b.dataset.edit)));document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>{const row={...rows.find(r=>r.id==b.dataset.copy)};delete row.id;edit(row)});document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{const row=rows.find(r=>r.id==b.dataset.view);const editor=document.querySelector('#editor');editor.hidden=false;editor.innerHTML=`<h2>Record #${row.id}</h2><dl>${fields.map(f=>`<dt>${esc(title(f))}</dt><dd>${esc(row[f]||'—')}</dd>`).join('')}</dl><button id="close-record">Close</button>`;document.querySelector('#close-record').onclick=()=>editor.hidden=true;editor.scrollIntoView({behavior:'smooth'})})}
+ function edit(row={}){const editor=document.querySelector('#editor');editor.hidden=false;editor.innerHTML=`<h2>${row.id?'Edit':'New'} ${esc(title(page))} record</h2><form id="record">${fields.map(f=>{const numeric=['amount','price','quantity','budget','hours','hourly_rate'].includes(f),type=f.includes('email')?'email':f.includes('date')||['start','end'].includes(f)?'date':numeric?'number':'text';return `<label>${esc(title(f))}<input name="${f}" type="${type}" value="${esc(row[f]??'')}" ${f==='name'||numeric?'required':''} ${numeric?'min="0" step="0.01"':''}></label>`}).join('')}<button>Save record</button> <button type="button" id="cancel">Cancel</button></form>`;document.querySelector('#cancel').onclick=()=>editor.hidden=true;document.querySelector('#record').onsubmit=async e=>{e.preventDefault();try{await api('records/'+page,{...Object.fromEntries(new FormData(e.target)),...(row.id?{id:row.id}:{})});await show(page);message('Record saved')}catch(error){message(error.message)}};editor.scrollIntoView({behavior:'smooth'})}
+ if(canEdit)document.querySelector('#new').onclick=()=>edit();
+ document.querySelector('#search').oninput=()=>{pageNumber=1;render()};document.querySelector('#record-sort').onchange=e=>{sort=e.target.value;render()};document.querySelector('#sort-direction').onclick=e=>{direction*=-1;e.target.textContent=direction===1?'Ascending ↑':'Descending ↓';render()};document.querySelector('#page-size').onchange=()=>{pageNumber=1;render()};document.querySelector('#previous-records').onclick=()=>{pageNumber--;render()};document.querySelector('#next-records').onclick=()=>{pageNumber++;render()};document.querySelector('#record-export').onclick=()=>downloadCsv(page+'.csv',filtered,fields);render();
+}
+function showFeatureGuide(){content.innerHTML='<section><h2>Workspace feature guide</h2><p>Choose a module below. Buttons use your current workspace and permissions.</p>'+navGroups.map(([name,pages])=>{pages=pages.filter(availablePage).filter(p=>p!=='help');return pages.length?`<h3>${esc(name)}</h3><div class="quick-links">${pages.map(p=>`<button data-go="${p}">${esc(pageLabel(p))}</button>`).join('')}</div>`:''}).join('')+'<h3>Keyboard and page tools</h3><p>Ctrl/Cmd + K searches navigation. Use Back, Home, Refresh, Print and Bookmark in the toolbar. Record lists support search, sorting, pagination, CSV export, viewing, editing and duplication according to your role.</p><h3>Financial operations</h3><p>Provider payroll and e-filing require configured onboarding. New tenants cannot use platform provider credentials. Financial approvals require a different administrator. General records are operational; only posted journals affect financial balances.</p></section>';goButtons()}
+
+async function showFinancialStatements(){
+ const r=await api('financial-statements');
+ const statement=(heading,types)=>`<section><h2>${heading}</h2><div class="table-scroll"><table><thead><tr><th>Account</th><th>Name</th><th>Type</th><th>Balance</th></tr></thead><tbody>${r.accounts.filter(a=>types.includes(a.type)).map(a=>`<tr><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${usd(a.balance_cents)}</td></tr>`).join('')}</tbody></table></div></section>`;
+ content.innerHTML=`<section><header><div><h2>Financial statements</h2><p>${esc(r.basis)}</p></div><button id="statements-export">Export accounts CSV</button></header><div class="grid"><div class="card">Revenue<strong>${usd(r.revenue_cents)}</strong></div><div class="card">Expenses<strong>${usd(r.expense_cents)}</strong></div><div class="card">Net income<strong>${usd(r.net_income_cents)}</strong></div></div></section>${statement('Profit & loss — posted since inception',['income','expense'])}${statement('Balance sheet — posted balances',['asset','liability','equity'])}<section><h2>Balance sheet check</h2><p>Assets: ${usd(r.assets_cents)} · Liabilities: ${usd(r.liabilities_cents)} · Recorded equity: ${usd(r.equity_cents)} · Current earnings: ${usd(r.retained_current_earnings_cents)}</p><p>${r.balanced?'Assets equal liabilities plus equity and current earnings.':'The balance sheet requires review.'}</p><button data-go="journals">View journals</button> <button data-go="reports">Trial balance and audit</button></section>`;
+ document.querySelector('#statements-export').onclick=()=>downloadCsv('financial-accounts.csv',r.accounts,['code','name','type','debit_cents','credit_cents','balance_cents']);goButtons();
+}
+async function showTaxOrganizer(){
+ const [returns,documents,income,deductions]=await Promise.all(['tax_returns','tax_documents','tax_income','tax_deductions'].map(p=>api('records/'+p)));
+ content.innerHTML=`<section><h2>Guided tax organizer</h2><p>Organize return records and supporting references before using your authorized preparation provider. This organizer does not calculate a complete tax return.</p><div class="quick-links"><button data-go="tax_returns">1. Return profiles</button><button data-go="tax_documents">2. Document references</button><button data-go="tax_income">3. Income records</button><button data-go="tax_deductions">4. Deduction records</button>${isAdmin()?'<button data-go="tax_calculator">5. Ordinary-income estimate</button><button data-go="efile">6. Authorized filing requests</button>':''}</div><p class="notice">Store references rather than SSNs, bank credentials or document contents in general record fields. Estimates exclude credits, capital gains, AMT, self-employment and state/local tax.</p></section><section><h2>Return preparation overview</h2>${returns.length?'<div class="table-scroll"><table><thead><tr><th>Return ID</th><th>Return</th><th>Year</th><th>Status</th><th>Documents</th><th>Income entries</th><th>Deduction entries</th></tr></thead><tbody>'+returns.map(r=>{const count=rows=>rows.filter(x=>String(x.return_id)===String(r.id)).length;return `<tr><td>${r.id}</td><td>${esc(r.name)}</td><td>${esc(r.year)}</td><td>${esc(r.status||'Not specified')}</td><td>${count(documents)}</td><td>${count(income)}</td><td>${count(deductions)}</td></tr>`}).join('')+'</tbody></table></div>':'<p class="empty-state">Create a return profile to start. Use its numeric record ID as the return reference on related entries.</p>'}</section>`;goButtons();
+}
+const capabilitySections=[
+ {name:'Payroll & people · ADP-style scope',reference:'https://www.adp.com/what-we-offer/products/adp-workforce-now/capabilities.aspx',items:[
+ ['Employee directory','records','employees','Create, edit, search and export employee records.'],
+ ['Time sheets','records','time','Record hours; payroll-rule calculation and punch-clock hardware integration are not included.'],
+ ['Leave requests','records','leave','Maintain leave dates and status; entitlement accrual rules are not automated.'],
+ ['Recruiting','records','recruiting','Maintain applicant and position records.'],
+ ['Benefits','records','benefits','Maintain plan records; carrier enrollment and eligibility rules are not integrated.'],
+ ['Performance','records','performance','Maintain employee goals and review status.'],
+ ['Gross pay worksheet','working','payroll','Calculate hours × hourly rate; no withholding or overtime rules.'],
+ ['Provider payroll draft','integrated','payroll_processing','Check company and worker references; requires platform provider configuration.'],
+ ['Calculated payroll preview','integrated','jobs','Provider calculates taxes and net pay after approved payroll creation.'],
+ ['Independent payroll release','integrated','approvals','Second administrator approval and provider preview timestamp check.'],
+ ['Job status and audit','working','jobs','Review jobs, results and uncertain outcomes.'],
+ ['Employee self-service portal','planned',null,'Per-employee private views are not implemented.'],
+ ['Pay statements and W-2/1099 delivery','planned',null,'Document generation and employee delivery are not implemented.'],
+ ['Direct deposit and tax remittance','integrated','payroll_processing','External provider onboarding, funding and authorization are required.'],
+ ['Benefits carrier connections','planned',null,'Carrier-specific enrollment and synchronization are not implemented.'],
+ ['Scheduling, overtime and PTO accrual engines','planned',null,'Jurisdiction and employer policy engines are not implemented.'],
+ ['Compensation planning and HR compliance','planned',null,'Compensation cycles and jurisdiction-specific compliance are not implemented.']
+ ]},
+ {name:'Accounting · QuickBooks-style scope',reference:'https://quickbooks.intuit.com/learn-support/en-us/quickbooks-online/reports/',items:[
+ ['Business dashboard','working','dashboard','Posted ledger metrics, operational totals, attention lists and recent audit events.'],
+ ['Customers','records','customers','Create, edit, view, duplicate, search, sort and export.'],
+ ['Vendors','records','vendors','Workspace-scoped supplier records.'],
+ ['Products and services','records','products','Product reference, price and quantity records; no stock-movement ledger.'],
+ ['Invoices','records','invoices','Operational invoice records with approved ledger posting.'],
+ ['Bills','records','bills','Operational bill records with approved ledger posting.'],
+ ['Expenses','records','expenses','Operational expense records; posting is separate.'],
+ ['Projects','records','projects','Customer, budget and project-status records.'],
+ ['Chart of accounts and journals','working','journals','Balanced double-entry postings using integer cents.'],
+ ['Trial balance','working','reports','Debits, credits and CSV export.'],
+ ['Profit & loss','working','financial_statements','Since-inception posted revenue, expenses and net income.'],
+ ['Balance sheet','working','financial_statements','Posted assets, liabilities, recorded equity and current earnings.'],
+ ['Bank feeds','integrated','bank_connections','Plaid token exchange and incremental synchronization for the configured platform.'],
+ ['Bank CSV import','working','bank_connections','Deduplicated transaction import, review and explicit category posting.'],
+ ['Recurring operational records','working','recurring','Day-based schedules; ledger posting remains explicit.'],
+ ['Invoice/bill approvals','working','approvals','Separate creator submission, independent approval and durable posting job.'],
+ ['Audit trail','working','reports','Workspace-scoped operational and workflow audit entries.'],
+ ['Multi-business workspaces','working','tenants','Separate business databases and platform-admin workspace controls.'],
+ ['Invoice line items, PDFs and payments','planned',null,'Line-item billing, invoice PDF generation and payment matching are not implemented.'],
+ ['Bank reconciliation and matching','planned',null,'Statement reconciliation and automatic matching are not implemented.'],
+ ['Inventory valuation and COGS','planned',null,'Inventory movement, costing and valuation are not implemented.'],
+ ['Sales tax, multi-currency and 1099 filing','planned',null,'These calculation, currency and filing engines are not implemented.'],
+ ['Cash-flow statement and date-filtered reports','planned',null,'Dedicated cash-flow classifications and period-report filters are not implemented.']
+ ]},
+ {name:'Tax preparation · TurboTax-style scope',reference:'https://turbotax.intuit.com/personal-taxes/online/file-your-own-taxes/',items:[
+ ['Guided tax organizer','working','tax_organizer','Return references and step-by-step access to document, income and deduction records.'],
+ ['Return profiles','records','tax_returns','Year, filing-status and preparation-status records.'],
+ ['Document organizer','records','tax_documents','Track document references by return ID; no sensitive document upload storage.'],
+ ['Income organizer','records','tax_income','Income categories, return references and amounts.'],
+ ['Deduction organizer','records','tax_deductions','Deduction categories, return references and amounts.'],
+ ['2026 ordinary-income estimate','working','tax_calculator','Limited federal estimate with the basic standard deduction; not a complete return.'],
+ ['Authorized e-filing requests','integrated','efile','Requires an external prepared/validated return, signed authorization and compatible gateway.'],
+ ['Filing approvals and acknowledgements','integrated','jobs','Independent approval and provider acknowledgement refresh.'],
+ ['Tax document OCR and W-2/1099 import','planned',null,'Form ingestion and OCR are not implemented.'],
+ ['Full federal 1040 and schedules','planned',null,'Complete return calculations, validations and form generation are not implemented.'],
+ ['State and local returns','planned',null,'State/year-specific preparation and filing engines are not implemented.'],
+ ['Credits, capital gains and self-employment','planned',null,'These calculation engines are not implemented.'],
+ ['Amended and prior-year returns','planned',null,'Amendment calculations and prior-year tax engines are not implemented.'],
+ ['Expert review, audit defense and refund tracking','planned',null,'Professional services and authority/provider tracking integrations are not implemented.']
+ ]}
+];
+function showCapabilities(){
+ content.innerHTML='<section><h2>Capability catalog</h2><p>Working = implemented workflow. Records = operational records only. Integrated = requires an external provider and workspace eligibility. Planned = unavailable. These are equivalent workflow categories, not a claim of exact product parity.</p><label>Find a capability<input id="capability-search" type="search" placeholder="Search payroll, invoices, tax…"></label></section><div class="capability-grid">'+capabilitySections.map(group=>`<section data-feature-group><h2>${esc(group.name)}</h2><p><a href="${group.reference}" target="_blank" rel="noopener noreferrer">Official product scope reference ↗</a></p>${group.items.map(([name,state,page,note],index)=>`<div class="feature-row" data-feature><span class="badge ${state}">${esc(title(state))}</span><strong>${index+1}. ${esc(name)}</strong><small>${esc(note)}</small>${page&&availablePage(page)?`<button data-go="${page}">Open ${esc(pageLabel(page))}</button>`:''}</div>`).join('')}</section>`).join('')+'</div>';
+ goButtons();document.querySelector('#capability-search').oninput=e=>{const query=e.target.value.toLowerCase();content.querySelectorAll('[data-feature]').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(query));content.querySelectorAll('[data-feature-group]').forEach(group=>group.hidden=![...group.querySelectorAll('[data-feature]')].some(row=>!row.hidden))};
+}
+
+let mobileInstallPrompt=null;
+window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();mobileInstallPrompt=event;const button=document.querySelector('#install-mobile');if(button)button.disabled=false});
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
+async function showDownloads(){
+ document.querySelector('#title').textContent='Mobile app downloads';
+ content.innerHTML=`<section><img class="login-brand" src="/assets/oob-logo.png" alt="Olamide Olatayo Bello"><h2>Take your workspace with you</h2><p>Accounting, people, tax organization and business management on your phone. Your account and workspace remain the same.</p><button id="install-mobile" ${mobileInstallPrompt?'':'disabled'}>Install web app</button><p>Android Chrome: open the browser menu and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>. iPhone/iPad Safari: Share → Add to Home Screen. The install button becomes available when your browser offers installation.</p><p class="notice">Business data requires an internet connection. Offline caching is limited to public brand icons; authenticated responses are not cached.</p></section><section><h2>Android APK preview</h2><div id="apk-download-status">Checking published Android builds…</div><p><a href="/">Sign in</a> · <a href="/register">Create a business account</a></p></section>`;
+ document.querySelector('#install-mobile').onclick=async()=>{if(mobileInstallPrompt){await mobileInstallPrompt.prompt();await mobileInstallPrompt.userChoice;mobileInstallPrompt=null;document.querySelector('#install-mobile').disabled=true}};
+ try{const build=await api('mobile');document.querySelector('#apk-download-status').innerHTML=build.apk_available?`<a class="download-link" href="${esc(build.apk_url)}">Download Android preview APK</a><p>${esc(build.build_type)}. This is a test build, not a production-signed or Play Store release. Banking OAuth and external links may open your device browser.</p>`:`<p>No published APK is available yet. The web app installation is available above.</p><a href="${esc(build.workflow_url)}" target="_blank" rel="noopener noreferrer">View Android build status ↗</a>`}catch{document.querySelector('#apk-download-status').textContent='Build status is unavailable. Use the web app installation or check GitHub Actions.'}
+}
+async function showDeployment(){
+ const status=await api('platform/status');const readiness=status.state.readiness;const busy=status.jobs.some(j=>['queued','running'].includes(j.state));const ready=!!readiness?.deployment_source_ready;
+ const operations=[['verify','Run readiness checks','Check systemd services, timers, nginx and local HTTPS application identity.'],['backup','Back up all workspaces','Create consistent catalog and tenant database snapshots.'],['deploy','Deploy installed source','Run the trusted, root-owned deployment source already installed on this host.'],['commission','Recommission platform','Reapply dependencies, services, database initialization, routing and public verification using the installed source.']];
+ content.innerHTML=`<section><header><div><h2>Deployment, installation & commissioning</h2><p>Fixed operations run through a root-owned management broker. No shell commands or paths are accepted from the browser.</p></div><button id="deployment-refresh">Refresh status</button></header>${readiness?`<p>Last checked: ${esc(readiness.checked_at)}</p>${table(Object.entries(readiness.services).map(([service,state])=>({service,state})),['service','state'])}`:'<p class="notice">The management broker has not reported yet. Complete the Ansible deployment and allow up to one minute for its first check.</p>'}<div class="capability-grid">${operations.map(([kind,label,note])=>`<div class="card"><h3>${label}</h3><p>${note}</p><button data-platform-operation="${kind}" ${!ready||busy?'disabled':''}>${label}</button></div>`).join('')}</div><p class="notice">Deploy and recommission may briefly restart the workspace service. New GitHub commits require an operator to pull and deploy them on the server; this GUI deploys the installed trusted source.</p></section><section><h2>Operation history</h2>${status.jobs.length?table(status.jobs,['created','kind','state','summary']):'<p class="empty-state">No management operations have been requested.</p>'}</section>`;
+ document.querySelector('#deployment-refresh').onclick=()=>showDeployment().catch(e=>message(e.message));content.querySelectorAll('[data-platform-operation]').forEach(b=>b.onclick=async()=>{try{content.querySelectorAll('[data-platform-operation]').forEach(button=>button.disabled=true);await api('platform/jobs',{kind:b.dataset.platformOperation});message('Operation queued. The management broker processes it automatically.');await showDeployment()}catch(error){message(error.message);await showDeployment()}});
+ if(busy)setTimeout(()=>{if(current==='deployment')showDeployment().catch(()=>message('The service may be restarting. Refresh status when it is available.'))},7000);
+}

@@ -1,4 +1,4 @@
-import os, json, sqlite3, secrets, hashlib, hmac, time
+import os, json, sqlite3, secrets, hashlib, hmac, time, uuid
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -6,6 +6,21 @@ from contextlib import ExitStack
 import advanced
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
+MOBILE_CACHE={'expires':0,'result':None}
+def mobile_download():
+ if MOBILE_CACHE['expires']>time.time():return MOBILE_CACHE['result']
+ result={'apk_available':False,'apk_url':None,'build_type':'Android WebView preview (debug signed)','workflow_url':'https://github.com/olamidebello/DOBHRAP/actions/workflows/android-preview.yml'}
+ try:
+  from urllib.request import Request,urlopen
+  with urlopen(Request('https://api.github.com/repos/olamidebello/DOBHRAP/releases/tags/android-preview',headers={'Accept':'application/vnd.github+json','User-Agent':'OOB-Business'}),timeout=3) as response:release=json.loads(response.read(200000))
+  for asset in release.get('assets',[]):
+   url=asset.get('browser_download_url','')
+   if asset.get('name')=='OOB-Business-Android-Preview.apk' and asset.get('size',0)>0 and url.startswith('https://github.com/olamidebello/DOBHRAP/releases/download/android-preview/'):
+    result.update(apk_available=True,apk_url=url)
+ except Exception:pass
+ MOBILE_CACHE.update(expires=time.time()+120,result=result)
+ return result
+
 def connect():
  c=sqlite3.connect(DB,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
 
@@ -64,6 +79,8 @@ def init():
   c.executescript("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE,salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS setup_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tenants(id INTEGER PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',created TEXT DEFAULT CURRENT_TIMESTAMP);")
   if 'tenant_id' not in [row[1] for row in c.execute('PRAGMA table_info(users)')]:c.execute('ALTER TABLE users ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1')
   c.execute("INSERT OR IGNORE INTO tenants(id,name) VALUES(1,'Platform workspace')")
+  c.execute("CREATE TABLE IF NOT EXISTS platform_jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,creator INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'queued',created TEXT DEFAULT CURRENT_TIMESTAMP,finished TEXT,summary TEXT)")
+  c.execute("CREATE TABLE IF NOT EXISTS platform_state(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
   initialize_business(c)
   if not c.execute('SELECT 1 FROM users').fetchone():
    p=os.environ.get('DOBHRAP_ADMIN_PASSWORD',''); email=os.environ.get('DOBHRAP_ADMIN_EMAIL','admin@example.com')
@@ -83,6 +100,35 @@ def post_journal(c,memo,lines):
  j=c.execute('INSERT INTO journals(memo) VALUES(?)',(memo,)).lastrowid
  for l in lines: c.execute('INSERT INTO lines(journal_id,account,debit,credit) VALUES(?,?,?,?)',(j,l['account'],l['debit'],l['credit']))
  return j
+def financial_statements(c):
+ accounts=[dict(row) for row in c.execute('SELECT a.*,coalesce(sum(l.debit),0) debit_cents,coalesce(sum(l.credit),0) credit_cents FROM accounts a LEFT JOIN lines l ON l.account=a.code GROUP BY a.code ORDER BY a.code')]
+ for account in accounts:account['balance_cents']=(account['credit_cents']-account['debit_cents']) if account['type'] in ('liability','equity','income') else (account['debit_cents']-account['credit_cents'])
+ total=lambda kind:sum(a['balance_cents'] for a in accounts if a['type']==kind)
+ net=total('income')-total('expense')
+ return {'accounts':accounts,'revenue_cents':total('income'),'expense_cents':total('expense'),'net_income_cents':net,'assets_cents':total('asset'),'liabilities_cents':total('liability'),'equity_cents':total('equity'),'retained_current_earnings_cents':net,'balanced':total('asset')==total('liability')+total('equity')+net,'basis':'Posted journal balances since inception; USD. Current earnings are shown separately from recorded equity.'}
+
+def dashboard(c, role):
+ counts={row['module']:row['count'] for row in c.execute('SELECT module,count(*) count FROM records GROUP BY module')}
+ totals={module:0 for module in ('invoices','bills','expenses')}
+ overdue=0;pending_leave=0;open_tasks=0
+ today=time.strftime('%Y-%m-%d')
+ for row in c.execute("SELECT module,data FROM records WHERE module IN ('invoices','bills','expenses','leave','tasks')"):
+  data=json.loads(row['data']);module=row['module']
+  if module in totals:
+   try:totals[module]+=advanced.cents(data.get('amount','0'))
+   except advanced.ServiceError:pass
+  if module=='invoices' and data.get('due_date') and data['due_date']<today:overdue+=1
+  if module=='leave' and data.get('status','').lower() in ('','pending','requested'):pending_leave+=1
+  if module=='tasks' and data.get('status','').lower() not in ('done','complete','completed','cancelled'):open_tasks+=1
+ balances={row['type']:row['balance'] for row in c.execute('SELECT a.type,coalesce(sum(l.debit-l.credit),0) balance FROM accounts a LEFT JOIN lines l ON l.account=a.code GROUP BY a.type')}
+ revenue=-balances.get('income',0);expenses=balances.get('expense',0)
+ trend=[dict(row) for row in c.execute("SELECT substr(j.created,1,7) month,sum(CASE WHEN a.type='income' THEN l.credit-l.debit ELSE 0 END) revenue_cents,sum(CASE WHEN a.type='expense' THEN l.debit-l.credit ELSE 0 END) expense_cents FROM journals j JOIN lines l ON l.journal_id=j.id JOIN accounts a ON a.code=l.account WHERE j.created>=date('now','start of month','-5 months') GROUP BY substr(j.created,1,7) ORDER BY month")]
+ result={'counts':counts,'record_totals_cents':totals,'ledger':{'revenue_cents':revenue,'expense_cents':expenses,'net_income_cents':revenue-expenses,'cash_cents':c.execute("SELECT coalesce(sum(debit-credit),0) FROM lines WHERE account='1000'").fetchone()[0]},'attention':{'past_due_invoice_records':overdue,'pending_leave':pending_leave,'open_tasks':open_tasks},'trend':trend,'recent_activity':[dict(row) for row in c.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 8')],'generated_at':time.strftime('%Y-%m-%d %H:%M:%S UTC',time.gmtime())}
+ if role in ('admin','super_admin'):
+  result['workflow_counts']={row['state']:row['count'] for row in c.execute('SELECT state,count(*) count FROM workflows GROUP BY state')}
+  result['job_counts']={row['state']:row['count'] for row in c.execute('SELECT state,count(*) count FROM jobs GROUP BY state')}
+ return result
+
 class Handler(BaseHTTPRequestHandler):
  def reply(self,status,data,cookie=None):
   b=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff')
@@ -93,12 +139,15 @@ class Handler(BaseHTTPRequestHandler):
  def handle_request(self):
   try:
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/'):
+   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/downloads','/downloads/'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path=='/assets/oob-logo.png':
-    b=Path(__file__).with_name('assets').joinpath('oob-logo.png').read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path=='/advanced.js':
-    b=Path(__file__).with_name('advanced.js').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
+   if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
+    b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js'):
+    b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
+   if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
+    b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
+   if self.command=='GET' and path=='/api/mobile':self.reply(200,mobile_download());return
    if self.command=='GET' and path=='/api/identity': self.reply(200,{'application':'oob-business-suite','version':2}); return
    if path=='/health': self.reply(200,{'status':'ok'}); return
    if self.command=='POST':
@@ -126,6 +175,17 @@ class Handler(BaseHTTPRequestHandler):
     if not u:self.reply(401,{'error':'Sign in required'}); return
     if self.command=='POST' and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),u['csrf']): self.reply(403,{'error':'Invalid CSRF token'}); return
     if path=='/api/logout' and self.command=='POST': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
+    if path in ('/api/platform/status','/api/platform/jobs'):
+     if u['role']!='super_admin':self.reply(403,{'error':'Super administrator required'});return
+     if self.command=='GET':
+      state={row['key']:json.loads(row['value']) for row in c.execute('SELECT * FROM platform_state')}
+      jobs=[dict(row) for row in c.execute('SELECT * FROM platform_jobs ORDER BY created DESC,rowid DESC LIMIT 30')]
+      self.reply(200,{'state':state,'jobs':jobs});return
+     if path!='/api/platform/jobs' or body.get('kind') not in ('verify','backup','deploy','commission'):raise ValueError('Unsupported platform operation')
+     c.execute('BEGIN IMMEDIATE')
+     if c.execute("SELECT 1 FROM platform_jobs WHERE state IN ('queued','running')").fetchone():raise advanced.ServiceError('A platform operation is already queued or running',409)
+     jid=str(uuid.uuid4());c.execute('INSERT INTO platform_jobs(id,kind,creator) VALUES(?,?,?)',(jid,body['kind'],u['id']))
+     c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],'Platform operation queued '+body['kind']+' '+jid));c.commit();self.reply(202,{'id':jid,'state':'queued'});return
     if path=='/api/tenants':
      if u['role']!='super_admin':self.reply(403,{'error':'Super administrator required'});return
      if self.command=='GET':
@@ -141,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
     tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tenant_id,)).fetchone()
     if not tenant:self.reply(404,{'error':'Workspace not found'});return
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
-    if path=='/api/me': self.reply(200,{'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':MODULES,'tenant':dict(tenant)}); return
+    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':MODULES,'tenant':dict(tenant)}); return
     if path=='/api/users':
      if u['role'] not in ('admin','super_admin'):self.reply(403,{'error':'Administrator required'});return
      if self.command=='GET':self.reply(200,[dict(row) for row in c.execute('SELECT id,email,role FROM users WHERE tenant_id=? ORDER BY id',(tenant_id,))]);return
@@ -152,6 +212,8 @@ class Handler(BaseHTTPRequestHandler):
      salt=secrets.token_hex(16);c.execute('INSERT INTO users(email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?)',(email,salt,password(body['password'],salt),body['role'],tenant_id))
      c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],'User created for workspace '+str(tenant_id)));c.commit();self.reply(201,{'ok':True});return
     c=stack.enter_context(tenant_connect(tenant_id))
+    if path=='/api/financial-statements' and self.command=='GET':self.reply(200,financial_statements(c));return
+    if path=='/api/dashboard' and self.command=='GET':self.reply(200,dashboard(c,u['role']));return
     result=advanced.dispatch(path,self.command,body,c,u,post_journal,tenant_id=tenant_id)
     if result is not None:self.reply(200,result);return
     if self.command=='POST' and u['role']=='viewer':self.reply(403,{'error':'Read-only role'});return

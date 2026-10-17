@@ -52,11 +52,11 @@
       register: branding_asset
     - name: Derive immutable source release ID
       ansible.builtin.set_fact:
-        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
+        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
-        name: [python3, python3-venv, nginx, certbot, python3-certbot-nginx, curl]
+        name: [python3, python3-venv, nginx, certbot, python3-certbot-nginx, curl, ansible]
         update_cache: true
         state: present
     - name: Inspect dedicated application account
@@ -99,7 +99,7 @@
         owner: root
         group: "{{ service_user }}"
         mode: '0640'
-      loop: [assets/oob-logo.png, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py]
+      loop: [assets/oob-logo.png, assets/app-icon-192.png, assets/app-icon-512.png, assets/app-icon.svg, manifest.webmanifest, service-worker.js, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, workspace.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py]
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
@@ -432,6 +432,69 @@
         status_code: 200
       register: public_logo
       failed_when: public_logo.status != 200 or public_logo.content_type != 'image/png'
+    - name: Prepare root-owned management directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop: [/opt/oob-control, /var/log/oob-admin]
+    - name: Preserve trusted source for GUI deployment and commissioning
+      ansible.builtin.copy:
+        src: "{{ app_source }}/{{ item }}"
+        dest: "/opt/oob-control/{{ item }}"
+        owner: root
+        group: root
+        mode: '0600'
+        directory_mode: '0700'
+      loop: [app.py, advanced.py, advanced.js, workspace.js, worker.py, backup.py, index.html, requirements.txt, README.md, manifest.webmanifest, service-worker.js, 'ansible/', 'tests/', 'assets/', 'mobile/']
+      when: not (ansible_connection == 'local' and (app_source | realpath) == '/opt/oob-control')
+    - name: Install root-owned fixed-operation management broker
+      ansible.builtin.copy:
+        src: "{{ app_source }}/ansible/admin-runner.py"
+        dest: /opt/oob-control/admin-runner.py
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Install management operation service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-admin.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=OOB fixed-operation management broker
+          After=network.target
+          [Service]
+          Type=oneshot
+          User=root
+          EnvironmentFile=/etc/dobhrap.env
+          ExecStart=/usr/bin/python3 /opt/oob-control/admin-runner.py
+          TimeoutStartSec=1500
+          UMask=0077
+    - name: Install management operation timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-admin.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=OOB management queue schedule
+          [Timer]
+          OnBootSec=45s
+          OnUnitInactiveSec=30s
+          Unit=oob-admin.service
+          [Install]
+          WantedBy=timers.target
+    - name: Validate management service and timer
+      ansible.builtin.command:
+        argv: [systemd-analyze, verify, /etc/systemd/system/oob-admin.service, /etc/systemd/system/oob-admin.timer]
+      changed_when: false
+    - name: Enable management operation timer
+      ansible.builtin.systemd:
+        name: oob-admin.timer
+        daemon_reload: true
+        enabled: true
+        state: started
     - name: Report browser setup instructions
       ansible.builtin.debug:
         msg: "Open https://{{ domain }}/ to create the first super administrator. Read the private token on the server with: sudo cat /etc/dobhrap-setup.token . Setup closes automatically once an account exists."
