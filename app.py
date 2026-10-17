@@ -4,6 +4,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from contextlib import ExitStack
 import advanced
+import marketplace
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 MOBILE_CACHE={'expires':0,'result':None}
@@ -82,6 +83,7 @@ def init():
   c.execute("CREATE TABLE IF NOT EXISTS platform_jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,creator INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'queued',created TEXT DEFAULT CURRENT_TIMESTAMP,finished TEXT,summary TEXT)")
   c.execute("CREATE TABLE IF NOT EXISTS platform_state(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
   initialize_business(c)
+  marketplace.initialize(c)
   if not c.execute('SELECT 1 FROM users').fetchone():
    p=os.environ.get('DOBHRAP_ADMIN_PASSWORD',''); email=os.environ.get('DOBHRAP_ADMIN_EMAIL','admin@example.com')
    if p:
@@ -150,6 +152,16 @@ class Handler(BaseHTTPRequestHandler):
    if self.command=='GET' and path=='/api/mobile':self.reply(200,mobile_download());return
    if self.command=='GET' and path=='/api/identity': self.reply(200,{'application':'oob-business-suite','version':2}); return
    if path=='/health': self.reply(200,{'status':'ok'}); return
+   if self.command=='GET' and path=='/api/market/health':
+    self.reply(200,{'marketplace':marketplace.enabled(),'environment':os.environ.get('PAYMENTS_ENV','test')});return
+   if path in ('/api/market/webhooks/stripe','/api/market/webhooks/paystack') and self.command=='POST':
+    size=int(self.headers.get('Content-Length',0))
+    if not 0<size<=256000:self.reply(413,{'error':'Webhook too large'});return
+    raw=self.rfile.read(size)
+    with connect() as payment_db:
+     result=marketplace.webhook(payment_db,path.rsplit('/',1)[1],raw,self.headers)
+     payment_db.commit()
+    self.reply(200,result);return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))
     if not 0<=size<=100000: self.reply(413,{'error':'Request too large'}); return
@@ -211,6 +223,8 @@ class Handler(BaseHTTPRequestHandler):
      if '@' not in email or len(email)>254:raise ValueError('Enter a valid email')
      salt=secrets.token_hex(16);c.execute('INSERT INTO users(email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?)',(email,salt,password(body['password'],salt),body['role'],tenant_id))
      c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],'User created for workspace '+str(tenant_id)));c.commit();self.reply(201,{'ok':True});return
+    result=marketplace.dispatch(path,self.command,body,c,u,tenant_id)
+    if result is not None:c.commit();self.reply(200,result);return
     c=stack.enter_context(tenant_connect(tenant_id))
     if path=='/api/financial-statements' and self.command=='GET':self.reply(200,financial_statements(c));return
     if path=='/api/dashboard' and self.command=='GET':self.reply(200,dashboard(c,u['role']));return

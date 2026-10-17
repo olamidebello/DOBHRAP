@@ -212,3 +212,39 @@ systemctl status oob-business-bank-import.timer --no-pager
 systemctl list-timers oob-business-bank-import.timer --no-pager
 journalctl -u oob-business-bank-import.service -n 30 --no-pager
 ```
+
+### Payment gateways and service marketplace
+
+On the hosting server, deploy the marketplace with:
+
+```sh
+cd /root/DOBHRAP-oob
+git pull --ff-only
+ansible-playbook -i 'dobhrap,' -c local ansible/marketplace-oob.yml
+```
+
+The playbook privately collects Stripe and/or Paystack secret keys, validates their test/live prefixes, and confirms API access with read-only balance requests. Live payments require an explicit live-mode confirmation. It builds and tests the release, deploys the database/API/GUI, and verifies the public HTTPS marketplace configuration and `oob-business-marketplace.timer`. A merchant account and provider approval are required; Ansible does not perform merchant identity verification or fabricate credentials. For unattended setup, store `market_payment_environment`, `market_live_confirm`, `market_stripe_key`, `market_stripe_webhook_secret`, and `market_paystack_key` in an Ansible Vault encrypted file and pass `-e @/root/marketplace.vault.yml --ask-vault-pass`. Empty keys disable the respective gateway during this setup. Normal repair runs retain previously installed gateway settings.
+
+Stripe webhook registration is automatic: the playbook finds the exact application endpoint, creates it when absent, enables the selected Checkout events, and immediately saves the newly returned signing secret in a root-only file. It reuses the saved secret on subsequent runs. If the endpoint predates this installation and its secret is not saved locally, provide its existing `whsec_...` signing secret from Stripe. Ambiguous endpoint inventories stop before creating duplicates. The script does not create a payment to test the connection.
+
+Webhook endpoints:
+
+- Stripe: `https://olamideolatayobello.com/api/market/webhooks/stripe` — `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.expired`.
+- Paystack: `https://olamideolatayobello.com/api/market/webhooks/paystack` — set this in your Paystack merchant dashboard for the selected environment. This integration does not claim to automate that dashboard setting.
+
+The GUI has **Service marketplace**, **Marketplace orders**, **Purchased services**, and **Marketplace administration**. The super administrator creates/edits/publishes/archives offers, sets prices in cents or kobo, and manages the fulfillment queue. No paid offers or recommended prices are published automatically. Supported checkout pairs are Stripe/USD and Paystack/NGN; additional gateways/currencies require adapters. Offers are one-time platform service packages, such as accounting support or office onboarding. They are not recurring subscriptions, a reseller marketplace, inventory shipping, automatic payroll execution, or server hosting provisioning.
+
+Workspace administrators purchase through provider-hosted checkout; card data is never collected by the application. The backend snapshots the catalog price and service code into the order and ignores browser-supplied totals. Checkout requests have a workspace/user-bound idempotency key. Stripe initialization retries reuse the original order ID as the provider idempotency key; Paystack uses a unique order reference. After an uncertain old Stripe initialization, automatic reinitialization is blocked before its idempotency window expires. Reconcile unknown outcomes before making another order. Signed callbacks are verified against the exact raw payload (Stripe timestamp/HMAC-SHA256 or Paystack HMAC-SHA512), deduplicated, and durably scheduled. The timer independently checks pending orders even if a callback is missed. A checkout return URL never establishes payment success.
+
+Payment verification retrieves the payment from the selected merchant API and checks successful payment, reference, exact integer amount, currency and test/live environment. Only then does one database transaction activate a purchased service record and enqueue it for fulfillment, once per order. A test payment creates `test_fulfilled` / `test_active` records, separate from live services. Workspace suspension prevents service activation; verification retries preserve pending paid orders for later fulfillment. Human services must still be delivered by staff, whose queue states are new/in progress/completed/suspended. These service records do not change existing module permissions or imply that a human service has already been delivered.
+
+Super admins see all orders and service delivery states; other users only see their workspace's orders and services. Only workspace administrators can initiate purchases or request payment verification. Product administration and fulfillment updates require the platform super administrator. Gateway keys remain in the root-only environment file, never in the GUI or source. The admin gateway table distinguishes configured signing keys from the last successfully authenticated callback. Credential checks do not prove webhook delivery: complete a provider test checkout and confirm its order plus signed event before enabling production.
+
+Refunds, disputes, merchant settlement, taxes on sales, and reseller payouts are not automated. Reconcile them in the provider console and suspend the affected purchased service in the GUI. Switching payment environments pauses automatic reconciliation of orders from the other environment. Automatic confirmation polls up to twenty due orders per run, with retry delays on unavailable or mismatched provider responses. It does not debit a card, retry a charge, issue a refund, or post accounting journals.
+
+Check the scheduler:
+
+```sh
+systemctl status oob-business-marketplace.timer --no-pager
+journalctl -u oob-business-marketplace.service -n 30 --no-pager
+```

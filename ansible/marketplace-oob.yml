@@ -1,0 +1,219 @@
+---
+- name: Configure and confirm marketplace payment gateways
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars_prompt:
+    - name: market_payment_environment
+      prompt: Payment environment (test/live)
+      private: false
+      default: test
+    - name: market_live_confirm
+      prompt: Explicitly allow live customer payments (yes/no)
+      private: false
+      default: 'no'
+    - name: market_stripe_key
+      prompt: Stripe secret key (leave empty to disable Stripe)
+      private: true
+      default: ''
+    - name: market_stripe_webhook_secret
+      prompt: Existing Stripe webhook signing secret (leave empty to auto-create or reuse the saved endpoint)
+      private: true
+      default: ''
+    - name: market_paystack_key
+      prompt: Paystack secret key (leave empty to disable Paystack)
+      private: true
+      default: ''
+  tasks:
+    - name: Validate deployment mode
+      ansible.builtin.assert:
+        that:
+          - ansible_connection == 'local'
+          - market_payment_environment in ['test', 'live']
+          - market_payment_environment != 'live' or market_live_confirm | bool
+        fail_msg: Run locally; live payments require explicit confirmation.
+    - name: Validate selected credentials privately
+      ansible.builtin.assert:
+        that:
+          - market_stripe_key | length > 0 or market_paystack_key | length > 0
+          - market_stripe_key | length == 0 or market_stripe_key.startswith('sk_' + market_payment_environment + '_')
+          - market_paystack_key | length == 0 or market_paystack_key.startswith('sk_' + market_payment_environment + '_')
+          - market_stripe_webhook_secret | length == 0 or market_stripe_webhook_secret.startswith('whsec_')
+      no_log: true
+    - name: Confirm Stripe credentials with a read-only API request
+      ansible.builtin.uri:
+        url: https://api.stripe.com/v1/balance
+        headers:
+          Authorization: 'Bearer {{ market_stripe_key }}'
+        return_content: true
+        follow_redirects: none
+        status_code: 200
+      register: stripe_confirmation
+      when: market_stripe_key | length > 0
+      no_log: true
+    - name: Confirm Stripe environment privately
+      ansible.builtin.assert:
+        that: stripe_confirmation.json.livemode == (market_payment_environment == 'live')
+      when: market_stripe_key | length > 0
+      no_log: true
+    - name: Confirm Paystack credentials with a read-only API request
+      ansible.builtin.uri:
+        url: https://api.paystack.co/balance
+        headers:
+          Authorization: 'Bearer {{ market_paystack_key }}'
+        return_content: true
+        follow_redirects: none
+        status_code: 200
+      register: paystack_confirmation
+      when: market_paystack_key | length > 0
+      no_log: true
+    - name: Confirm Paystack accepted credentials privately
+      ansible.builtin.assert:
+        that: paystack_confirmation.json.status | bool
+      when: market_paystack_key | length > 0
+      no_log: true
+    - name: Inspect saved Stripe webhook configuration
+      ansible.builtin.stat:
+        path: /etc/oob-marketplace-webhook.json
+      register: market_webhook_cache
+    - name: Read saved webhook secret privately
+      ansible.builtin.slurp:
+        src: /etc/oob-marketplace-webhook.json
+      when: market_webhook_cache.stat.exists
+      register: market_webhook_saved
+      no_log: true
+    - name: List existing Stripe webhook endpoints privately
+      ansible.builtin.uri:
+        url: https://api.stripe.com/v1/webhook_endpoints?limit=100
+        headers:
+          Authorization: 'Bearer {{ market_stripe_key }}'
+        return_content: true
+        follow_redirects: none
+        status_code: 200
+      when: market_stripe_key | length > 0
+      register: market_webhooks
+      no_log: true
+    - name: Select only this application's webhook endpoint
+      ansible.builtin.set_fact:
+        market_endpoint_matches: "{{ market_webhooks.json.data | selectattr('url', 'equalto', 'https://olamideolatayobello.com/api/market/webhooks/stripe') | list }}"
+      when: market_stripe_key | length > 0
+      no_log: true
+    - name: Prevent duplicate or incomplete endpoint discovery
+      ansible.builtin.assert:
+        that:
+          - not market_webhooks.json.has_more
+          - market_endpoint_matches | length <= 1
+        fail_msg: Stripe endpoint discovery is ambiguous. Reconcile duplicate endpoints or paginate the merchant inventory before retrying.
+      when: market_stripe_key | length > 0
+      no_log: true
+    - name: Automatically register the Stripe webhook if absent
+      ansible.builtin.uri:
+        url: https://api.stripe.com/v1/webhook_endpoints
+        method: POST
+        headers:
+          Authorization: 'Bearer {{ market_stripe_key }}'
+          Idempotency-Key: "oob-marketplace-webhook-{{ market_payment_environment }}"
+        body_format: form-urlencoded
+        body:
+          url: https://olamideolatayobello.com/api/market/webhooks/stripe
+          description: OOB marketplace payment verification
+          api_version: '2024-06-20'
+          'enabled_events[0]': checkout.session.completed
+          'enabled_events[1]': checkout.session.async_payment_succeeded
+          'enabled_events[2]': checkout.session.expired
+        follow_redirects: none
+        return_content: true
+        status_code: 200
+      register: market_webhook_created
+      when: market_stripe_key | length > 0 and market_endpoint_matches | length == 0
+      no_log: true
+    - name: Retain a newly created signing secret immediately
+      ansible.builtin.copy:
+        dest: /etc/oob-marketplace-webhook.json
+        owner: root
+        mode: '0600'
+        content: "{{ {'id': market_webhook_created.json.id, 'secret': market_webhook_created.json.secret, 'environment': market_payment_environment} | to_json }}"
+      when: market_stripe_key | length > 0 and market_endpoint_matches | length == 0
+      no_log: true
+    - name: Set a newly created signing secret privately
+      ansible.builtin.set_fact:
+        market_effective_webhook_secret: '{{ market_webhook_created.json.secret }}'
+      when: market_stripe_key | length > 0 and market_endpoint_matches | length == 0
+      no_log: true
+    - name: Select an existing endpoint secret supplied or retained privately
+      ansible.builtin.set_fact:
+        market_effective_webhook_secret: "{{ market_stripe_webhook_secret if market_stripe_webhook_secret | length > 0 else ((market_webhook_saved.content | b64decode | from_json).secret if (market_webhook_cache.stat.exists and (market_webhook_saved.content | b64decode | from_json).id == market_endpoint_matches[0].id and (market_webhook_saved.content | b64decode | from_json).environment == market_payment_environment) else '') }}"
+      when: market_stripe_key | length > 0 and market_endpoint_matches | length == 1
+      no_log: true
+    - name: Require the secret for an existing endpoint when it cannot be recovered locally
+      ansible.builtin.assert:
+        that: market_effective_webhook_secret | length > 0
+        fail_msg: Supply the existing endpoint signing secret from the Stripe dashboard. Stripe only returns a new secret at creation.
+      when: market_stripe_key | length > 0
+    - name: Ensure the existing endpoint is enabled for marketplace events
+      ansible.builtin.uri:
+        url: 'https://api.stripe.com/v1/webhook_endpoints/{{ market_endpoint_matches[0].id }}'
+        method: POST
+        headers:
+          Authorization: 'Bearer {{ market_stripe_key }}'
+        body_format: form-urlencoded
+        body:
+          disabled: 'false'
+          'enabled_events[0]': checkout.session.completed
+          'enabled_events[1]': checkout.session.async_payment_succeeded
+          'enabled_events[2]': checkout.session.expired
+        follow_redirects: none
+        return_content: true
+        status_code: 200
+      when: market_stripe_key | length > 0 and market_endpoint_matches | length == 1
+      no_log: true
+    - name: Persist a supplied existing endpoint secret for future setup runs
+      ansible.builtin.copy:
+        dest: /etc/oob-marketplace-webhook.json
+        owner: root
+        mode: '0600'
+        content: "{{ {'id': market_endpoint_matches[0].id, 'secret': market_effective_webhook_secret, 'environment': market_payment_environment} | to_json }}"
+      when: market_stripe_key | length > 0 and market_endpoint_matches | length == 1
+      no_log: true
+    - name: Retain confirmed settings for deployment without logging keys
+      ansible.builtin.set_fact:
+        enable_marketplace: true
+        enable_live_payments: "{{ market_payment_environment == 'live' and market_live_confirm | bool }}"
+        payments_env: '{{ market_payment_environment }}'
+        marketplace_public_url: https://olamideolatayobello.com
+        stripe_secret_key: '{{ market_stripe_key }}'
+        stripe_webhook_secret: "{{ market_effective_webhook_secret | default('') }}"
+        paystack_secret_key: '{{ market_paystack_key }}'
+      no_log: true
+
+- import_playbook: repair-oob.yml
+
+- name: Confirm marketplace deployment
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify payment reconciliation timer
+      ansible.builtin.command: systemctl is-active oob-business-marketplace.timer
+      changed_when: false
+    - name: Confirm public HTTPS marketplace configuration
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/api/market/health
+        status_code: 200
+      register: marketplace_health
+    - name: Assert marketplace environment matches the confirmed configuration
+      ansible.builtin.assert:
+        that:
+          - marketplace_health.json.marketplace | bool
+          - marketplace_health.json.environment == market_payment_environment
+    - name: Report setup and required merchant-side steps
+      ansible.builtin.debug:
+        msg:
+          - Gateway API credentials confirmed using read-only requests. No payment was created by this playbook.
+          - 'Stripe webhook: https://olamideolatayobello.com/api/market/webhooks/stripe'
+          - 'Subscribe Stripe to checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.expired.'
+          - 'Paystack webhook: https://olamideolatayobello.com/api/market/webhooks/paystack'
+          - Stripe endpoint registration is automated. Set the Paystack webhook URL in its merchant dashboard. A real signed event is required to confirm webhook delivery.
+          - Super admin -> Marketplace administration -> create and publish one-time offers. No prices or paid offers are invented automatically.
+          - Customers -> Service marketplace -> checkout. Verified payments atomically activate a purchased-service record and fulfillment queue entry.
+          - Confirm a test checkout end-to-end before enabling live payments. Staff must deliver human services; refunds and disputes require merchant-console reconciliation.

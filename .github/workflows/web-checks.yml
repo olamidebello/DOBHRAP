@@ -21,6 +21,8 @@ jobs:
         run: pip install -r requirements.txt ansible-core==2.17.14
       - name: Check bank import Ansible syntax
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/bank-import-oob.yml
+      - name: Check marketplace Ansible syntax
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/marketplace-oob.yml
       - name: Run API and isolation tests
         run: python -m unittest discover -s tests -v
       - name: Install browser test runtime

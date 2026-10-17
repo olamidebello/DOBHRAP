@@ -21,3 +21,12 @@ enable_auto_bank_import: false
 enable_tenant_banking: false
 # Optional, requires Plaid Statements access and supported banks.
 enable_bank_statements: false
+
+# Hosted checkout and platform service marketplace; never commit real keys.
+enable_marketplace: false
+enable_live_payments: false
+payments_env: test
+marketplace_public_url: https://olamideolatayobello.com
+stripe_secret_key: ''
+stripe_webhook_secret: ''
+paystack_secret_key: ''

@@ -116,6 +116,11 @@ def main():
     ])
     if args.repair:
         mapping = {
+            'DOBHRAP_ENABLE_MARKETPLACE':'enable_marketplace',
+            'DOBHRAP_ENABLE_LIVE_PAYMENTS':'enable_live_payments',
+            'PAYMENTS_ENV':'payments_env', 'MARKETPLACE_PUBLIC_URL':'marketplace_public_url',
+            'STRIPE_SECRET_KEY':'stripe_secret_key', 'STRIPE_WEBHOOK_SECRET':'stripe_webhook_secret',
+            'PAYSTACK_SECRET_KEY':'paystack_secret_key',
             'PLAID_ENV':'plaid_env', 'PLAID_CLIENT_ID':'plaid_client_id',
             'PLAID_SECRET':'plaid_secret', 'PLAID_REDIRECT_URI':'plaid_redirect_uri',
             'DOBHRAP_ENABLE_LIVE_BANKING':'enable_live_banking',

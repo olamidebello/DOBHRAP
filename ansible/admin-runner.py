@@ -26,7 +26,7 @@ def main():
         if not c.execute("SELECT 1 FROM sqlite_master WHERE name='platform_jobs'").fetchone():
             return
         services = {}
-        for name in ('oob-business.service','oob-business-worker.timer','oob-business-backup.timer'):
+        for name in ('oob-business.service','oob-business-worker.timer','oob-business-backup.timer','oob-business-bank-import.timer','oob-business-marketplace.timer'):
             result = subprocess.run(['systemctl','is-active',name], capture_output=True, text=True, timeout=15)
             services[name] = result.stdout.strip()
         state = {'checked_at':datetime.now(timezone.utc).isoformat(), 'services':services,
@@ -61,7 +61,7 @@ def main():
                     run(['nginx','-t'],log)
                     for name in services:
                         run(['systemctl','is-active',name],log)
-                    run(['systemd-analyze','verify','/etc/systemd/system/oob-business.service','/etc/systemd/system/oob-business-worker.timer','/etc/systemd/system/oob-business-backup.timer'],log)
+                    run(['systemd-analyze','verify','/etc/systemd/system/oob-business.service','/etc/systemd/system/oob-business-worker.timer','/etc/systemd/system/oob-business-backup.timer','/etc/systemd/system/oob-business-bank-import.timer','/etc/systemd/system/oob-business-marketplace.timer'],log)
                     result=subprocess.run(['curl','--fail','--silent','--show-error','--noproxy','*','--resolve','olamideolatayobello.com:443:127.0.0.1','https://olamideolatayobello.com/api/identity'],capture_output=True,text=True,check=True,timeout=30)
                     if json.loads(result.stdout).get('application')!='oob-business-suite':
                         raise ValueError('Application identity did not match')

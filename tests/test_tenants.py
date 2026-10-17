@@ -172,3 +172,17 @@ class TenantTests(unittest.TestCase):
             self.register('unique')
         with app.connect() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM tenants').fetchone()[0], 2)
+
+    def test_marketplace_http_auth_roles_csrf_and_unsigned_webhook(self):
+        with self.assertRaises(HTTPError) as error:self.request('/api/market/orders')
+        self.assertEqual(error.exception.code,401)
+        self.register('market-buyer')
+        client,csrf=self.login('market-buyer@example.com')
+        with self.assertRaises(HTTPError) as error:self.request('/api/market/products',{'name':'unauthorized'},client,csrf)
+        self.assertEqual(error.exception.code,403)
+        with self.assertRaises(HTTPError) as error:self.request('/api/market/checkout',{},client,'bad-csrf')
+        self.assertEqual(error.exception.code,403)
+        self.assertEqual(self.request('/api/market/orders',client=client),[])
+        with patch.dict(os.environ,{'DOBHRAP_ENABLE_MARKETPLACE':'1','PAYMENTS_ENV':'test','STRIPE_SECRET_KEY':'sk_test_fixture','STRIPE_WEBHOOK_SECRET':'whsec_fixture'}):
+            with self.assertRaises(HTTPError) as error:self.request('/api/market/webhooks/stripe',{})
+            self.assertEqual(error.exception.code,400)
