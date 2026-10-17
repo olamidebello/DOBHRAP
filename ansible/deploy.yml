@@ -52,7 +52,7 @@
       register: branding_asset
     - name: Derive immutable source release ID
       ansible.builtin.set_fact:
-        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py')) | hash('sha256') }}"
+        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
@@ -99,7 +99,7 @@
         owner: root
         group: "{{ service_user }}"
         mode: '0640'
-      loop: [assets/oob-logo.png, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py]
+      loop: [assets/oob-logo.png, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py]
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
@@ -287,7 +287,7 @@
             {% endif %}
             server_name {{ domain }};
             client_max_body_size 100k;
-            location = /api/login {
+            location ~ ^/api/(login|register|setup)$ {
               limit_req zone=dobhrap_login burst=5 nodelay;
               proxy_pass http://127.0.0.1:{{ app_port }};
               proxy_set_header Host $host;
@@ -370,7 +370,7 @@
             ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
             ssl_protocols TLSv1.2 TLSv1.3;
             client_max_body_size 100k;
-            location = /api/login {
+            location ~ ^/api/(login|register|setup)$ {
               limit_req zone=dobhrap_login burst=5 nodelay;
               proxy_pass http://127.0.0.1:{{ app_port }};
               proxy_set_header Host $host;

@@ -229,10 +229,15 @@ def sync_bank(c, item_id):
         raise ServiceError('Concurrent bank sync; retry',409)
     return {'changes':changes,'pages':len(pages)}
 
-def dispatch(path, method, body, c, user, post_journal):
+def dispatch(path, method, body, c, user, post_journal, tenant_id=1):
     if not path.startswith('/api/advanced/'): return None
     if user['role'] not in ('admin','super_admin'): raise ServiceError('Administrator access required for financial operations',403)
     route=path[len('/api/advanced/'):]
+    if tenant_id!=1:
+        if route=='status' and method=='GET':
+            return {'banking':{'configured':False,'live_enabled':False},'payroll':{'configured':False,'live_enabled':False},'efile':{'configured':False,'transmission_enabled':False},'encryption_configured':bool(os.environ.get('DOBHRAP_ENCRYPTION_KEY')),'notice':'Provider onboarding must be configured for this workspace; platform provider credentials are unavailable.'}
+        if route in ('bank/link-token','bank/exchange','bank/sync','bank/disconnect','jobs/refresh') or (route=='workflows' and method=='POST' and body.get('kind') not in ('invoice_post','bill_post')):
+            raise ServiceError('Provider onboarding is not configured for this workspace',503)
     if route=='status' and method=='GET':
         return {'banking':{'provider':'Plaid','environment':os.environ.get('PLAID_ENV','sandbox'),
                 'configured':bool(os.environ.get('PLAID_CLIENT_ID') and os.environ.get('PLAID_SECRET')),

@@ -74,6 +74,11 @@ class SetupTests(unittest.TestCase):
             return urlopen(Request(base + path, data=json.dumps(body).encode() if body is not None else None,
                                    headers={'Content-Type': 'application/json', **(headers or {})}))
         try:
+            for route in ('/setup', '/setup/'):
+                with request(route) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                    self.assertIn(b'Create your super administrator', response.read())
             with request('/api/identity') as response:
                 self.assertEqual(json.load(response)['application'], 'oob-business-suite')
             with request('/api/setup/status') as response:
@@ -92,6 +97,9 @@ class SetupTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
             with request('/api/setup/status') as response:
                 self.assertFalse(json.load(response)['required'])
+            with self.assertRaises(HTTPError) as error:
+                request('/api/setup', self.payload(), {'X-Setup-Request': '1'})
+            self.assertEqual(error.exception.code, 409)
         finally:
             server.shutdown()
             server.server_close()

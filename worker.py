@@ -20,7 +20,7 @@ def recurring(c, today=None):
             a.audit(c,0,'recurring record generated '+str(rid))
         c.execute('UPDATE schedules SET next_date=? WHERE id=?',((due+timedelta(days=row['interval_days'])).isoformat(),row['id']))
 
-def execute(connect=app.connect):
+def execute(connect=app.connect, allow_provider=True):
     with connect() as c:
         c.execute('BEGIN IMMEDIATE')
         recurring(c)
@@ -34,6 +34,8 @@ def execute(connect=app.connect):
         provider_id=None
         try:
             data=a.unseal(job['payload']);kind=job['kind']
+            if not allow_provider and (kind.startswith('payroll_') or kind=='efile_submit'):
+                raise a.ServiceError('Provider onboarding unavailable for this workspace',503)
             if kind.startswith('payroll_') and data.get('_environment')!=a.os.environ.get('CHECK_ENV','sandbox'):
                 raise a.ServiceError('Payroll environment changed after approval; create a new workflow',503)
             if kind=='efile_submit' and data.get('_gateway')!=a.os.environ.get('EFILE_GATEWAY_URL',''):
@@ -84,6 +86,13 @@ def execute(connect=app.connect):
             a.audit(c,0,'workflow stopped '+job['workflow_id']+' '+state)
     return True
 
+def run_all():
+    with app.connect() as catalog:
+        tenants=[row['id'] for row in catalog.execute("SELECT id FROM tenants WHERE status='active' ORDER BY id")]
+    for tenant_id in tenants:
+        execute(lambda tid=tenant_id: app.tenant_connect(tid), allow_provider=tenant_id==1)
+
+
 if __name__=='__main__':
     app.init()
-    execute()
+    run_all()

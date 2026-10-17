@@ -85,9 +85,9 @@ See [the gateway contract](docs/efile-gateway.md). Tax estimates are never accep
 
 ## Remaining capabilities
 
-Not yet implemented: full tax-return preparation and all state/year rules; direct IRS e-filing; provider employee onboarding GUI; historical payroll imports; payroll-to-ledger synchronization; complete banking reconciliation and matching; invoice line items/PDFs/payments; COGS/stock movements; calendar-based recurring dates; comprehensive HR/benefits approval rules; MFA/password recovery; multi-company isolation; full P&L/balance-sheet/cash-flow reporting; automated backup restoration; provider reconciliation after ambiguous outcomes.
+Not yet implemented: full tax-return preparation and all state/year rules; direct IRS e-filing; provider employee onboarding GUI; historical payroll imports; payroll-to-ledger synchronization; complete banking reconciliation and matching; invoice line items/PDFs/payments; COGS/stock movements; calendar-based recurring dates; comprehensive HR/benefits approval rules; MFA/password recovery; full P&L/balance-sheet/cash-flow reporting; automated backup restoration; provider reconciliation after ambiguous outcomes.
 
-Operational invoice/bill records post only through explicit approved workflows. General expense records do not auto-post. Basic product quantities are records, not an inventory ledger. This version is single-company, USD ledger only. General records are not field-encrypted; do not put SSNs, bank credentials or tax-document contents in them. Restrict deployment access appropriately for the data you store.
+Operational invoice/bill records post only through explicit approved workflows. General expense records do not auto-post. Basic product quantities are records, not an inventory ledger. Each workspace has an isolated USD ledger. General records are not field-encrypted; do not put SSNs, bank credentials or tax-document contents in them. Restrict deployment access appropriately for the data you store.
 
 ## Verification and operations
 
@@ -132,9 +132,9 @@ After deploying `ansible/deploy-oob.yml`, read the setup token privately on the 
 sudo cat /etc/dobhrap-setup.token
 ```
 
-Open https://olamideolatayobello.com/ and enter the token, your email, a password of at least 14 characters, and confirmation. The first account receives the `super_admin` role. Setup is protected by a custom request header and a one-time server token; an immediate database transaction prevents simultaneous setup attempts from creating multiple owners. Setup cannot be reopened by restarting or redeploying. Do not post the setup token publicly.
+Open https://olamideolatayobello.com/setup and enter the token, your email, a password of at least 14 characters, and confirmation. The first account receives the `super_admin` role. Setup is protected by a custom request header and a one-time server token; an immediate database transaction prevents simultaneous setup attempts from creating multiple owners. Setup cannot be reopened by restarting or redeploying. Do not post the setup token publicly.
 
-Super Admin navigation opens the console for user management, integrations, approvals, reports and audit access. Super administrators can create additional super administrators; ordinary administrators cannot grant that role. All financial operations still require their existing independent approvals. Existing ordinary administrators are not automatically elevated. This remains a single-company application.
+Super Admin navigation opens the console for user management, integrations, approvals, reports and audit access. Super administrators can create additional super administrators; ordinary administrators cannot grant that role. All financial operations still require their existing independent approvals. Existing ordinary administrators are not automatically elevated. Business workspaces now use separate databases; platform administration can switch workspace context.
 
 ## Automatic diagnosis and repair
 
@@ -150,3 +150,15 @@ This local-only repair inspects the original port, dedicated-service overrides a
 Existing provider settings are retained privately, the database is backed up, the encryption key and setup token are preserved, all tests and systemd validation run before service activation, and nginx routing is repaired with backups. Final checks require private and public application identity, HTTPS, the actual logo and active worker/backup timers. A safe report with recommendations is saved at `/var/log/oob-repair-report.json`; `verified: true` appears only after those checks succeed. Network/DNS/certificate failures stop with the failing task; a public success is never inferred from a generic HTTP 200.
 
 Use `repair-oob.yml` for later redeployments so the selected port remains consistent. The legacy `dobhrap` service is left untouched by the repair's service selection; inspect it before retiring it. Do not run a second deployment concurrently. Keep `/etc/dobhrap.env.before-oob-repair`, `/etc/oob-repair-integrations.json`, the encryption key and database snapshots private.
+
+## Registration and multiple business workspaces
+
+Customers can register at `/register` using a business name, email, password and confirmation. Registration creates a new workspace and its administrator; it cannot grant platform super-admin access. The platform must complete `/setup` before registrations are accepted. Login normalizes email case. Registration, setup and login share nginx authentication throttling.
+
+Existing users and records remain in workspace 1. New workspaces use separate SQLite databases under `/var/lib/dobhrap/tenants/tenant-ID.db`. The main database contains the workspace catalog and authenticated users/sessions. Every request resolves workspace membership on the server; changing an ID in a request does not grant access. Tenant administrators create users only in their own workspace. Only platform super administrators may switch workspace context or manage workspace status.
+
+**Super Admin → Tenants** lists workspaces, user counts and status; it creates workspaces with an initial administrator, opens a workspace, and suspends or reactivates it. Suspension blocks existing sessions and new logins and removes the workspace from background processing. Financial two-person approvals remain required inside each workspace. No deletion operation is provided.
+
+Background processing visits every active workspace. Daily backups include the catalog/platform database and each tenant database in its own backup subdirectory. Restore the catalog and the appropriate tenant database snapshots together with the encryption key; each snapshot is individually consistent, and snapshots across workspaces are taken sequentially. Back up the entire tenant directory rather than only the main database.
+
+Platform Plaid, Check and e-filing credentials remain restricted to workspace 1. Newly registered tenants can use local accounting, HR, CSV banking, tax estimates and local invoice/bill approvals; their provider banking, payroll and e-filing operations stay disabled until tenant-specific provider onboarding is implemented. They cannot use or retrieve platform provider credentials.
