@@ -50,6 +50,7 @@ STEPS=[
 STEP_MAP={x['key']:x for x in STEPS}
 
 def initialize(c):
+ c.execute('CREATE TABLE IF NOT EXISTS tax_auto_reviews(return_id TEXT PRIMARY KEY REFERENCES tax_drafts(id) ON DELETE CASCADE,payload TEXT NOT NULL)')
  c.execute("CREATE TABLE IF NOT EXISTS tax_suggestion_jobs(id TEXT PRIMARY KEY,return_id TEXT NOT NULL,owner INTEGER NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',requested INTEGER NOT NULL,finished INTEGER,UNIQUE(return_id,digest))")
  c.execute('CREATE TABLE IF NOT EXISTS tax_amendments(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,year INTEGER NOT NULL,payload TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,updated INTEGER NOT NULL)')
  c.executescript('''CREATE TABLE IF NOT EXISTS tax_drafts (
@@ -197,13 +198,19 @@ def refund_review(data,completed,confirm,tax_year=2026):
  'estimated_refund_cents':max(0,delta),'estimated_balance_due_cents':max(0,-delta),'supported_tax_savings_cents':base['ordinary_income_tax_cents']-best['tax_cents'],'standard_deduction_cents':base['standard_deduction_cents']}
  return result
 
+def latest_ai_review(c,rid,payload):
+ stored=c.execute('SELECT payload FROM tax_auto_reviews WHERE return_id=?',(rid,)).fetchone();automatic=a.unseal(stored['payload']) if stored else {};manual=payload.get('ai_review',{})
+ return automatic if automatic.get('requested',0)>=manual.get('requested',0) else manual
+
 def view(c,row,data):
  payload={**{k:row[k] for k in ('id','year','revision','step','status','created','updated')},'data':mask(data.get('data',{})),
           'completed':data.get('completed',[]),'review':review(data.get('data',{}),data.get('completed',[]),row['year']),'sources':tax_rules.sources(row['year'])}
  docs=[]
  for d in c.execute('SELECT * FROM tax_draft_documents WHERE return_id=? ORDER BY created',(row['id'],)):
   meta=a.unseal(d['payload']);docs.append({'id':d['id'],'name':meta['name'],'type':meta['type'],'size':d['size']})
- payload['auto_ai_consent']=data.get('auto_ai_consent',False);job=c.execute('SELECT state FROM tax_suggestion_jobs WHERE return_id=? ORDER BY requested DESC,rowid DESC LIMIT 1',(row['id'],)).fetchone();payload['ai_suggestion_status']=job['state'] if job else 'off';payload['documents']=docs;payload['ai_review']=data.get('ai_review',{});payload['refund_review']=data.get('refund_review',{});return payload
+ payload['auto_ai_consent']=data.get('auto_ai_consent',False);job=c.execute('SELECT state FROM tax_suggestion_jobs WHERE return_id=? ORDER BY requested DESC,rowid DESC LIMIT 1',(row['id'],)).fetchone();payload['ai_suggestion_status']=job['state'] if job else 'off';payload['documents']=docs;ai=latest_ai_review(c,row['id'],data)
+ if ai.get('digest') and ai['digest']!=hashlib.sha256(json.dumps(data.get('data',{}),sort_keys=True).encode()).hexdigest():ai={'state':'outdated','notice':'Preparation changed; these AI suggestions require a new review.'}
+ payload['ai_review']=ai;payload['refund_review']=data.get('refund_review',{});return payload
 
 AMEND_FIELDS={'agi':'Adjusted gross income','taxable_income':'Taxable income','total_tax':'Total tax','total_payments':'Total payments'}
 def amendment_view(row,p):
@@ -331,7 +338,7 @@ def dispatch(path,method,body,c,user):
  if route=='ai-review':
   if body.get('consent') is not True:raise a.ServiceError('Consent is required to share the redacted summary with OpenAI')
   if settings.get('DOBHRAP_ENABLE_TAX_AI')!='1' or not settings.get('OPENAI_API_KEY') or not (settings.get('TAX_AI_MODEL') or settings.get('SUPPORT_AI_MODEL')):raise a.ServiceError('Configure tax AI in the super admin provider console',503)
-  now=int(time.time());previous=payload.get('ai_review',{})
+  now=int(time.time());previous=latest_ai_review(c,row['id'],payload)
   if c.execute('SELECT count(*) FROM tax_ai_runs WHERE owner=? AND requested>?',(user['id'],now-86400)).fetchone()[0]>=20:raise a.ServiceError('Daily tax AI limit reached',429)
   if now-int(previous.get('requested',0))<300:raise a.ServiceError('Wait five minutes before requesting another AI review',429)
   # Claim before the paid request. Ambiguous outcomes are never automatically retried.
@@ -424,13 +431,12 @@ def process_suggestions(c,allowed_owners,limit=3):
   payload=a.unseal(row['payload']);data=payload.get('data',{});digest=hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest();now=int(time.time())
   if not payload.get('auto_ai_consent') or digest!=job['digest']:
    c.execute("UPDATE tax_suggestion_jobs SET state='cancelled' WHERE id=?",(job['id'],));c.commit();continue
-  if now-int(payload.get('ai_review',{}).get('requested',0))<300:continue
+  if now-int(latest_ai_review(c,row['id'],payload).get('requested',0))<300:continue
   if c.execute('SELECT count(*) FROM tax_ai_runs WHERE owner=? AND requested>?',(job['owner'],now-86400)).fetchone()[0]>=20:
    c.execute("UPDATE tax_suggestion_jobs SET state='limit_reached' WHERE id=?",(job['id'],));c.commit();continue
   c.execute('BEGIN IMMEDIATE') if not c.in_transaction else None
   if c.execute("UPDATE tax_suggestion_jobs SET state='running' WHERE id=? AND state='queued'",(job['id'],)).rowcount!=1:c.rollback();continue
-  payload['ai_review']={'requested':now,'state':'running','notice':'Automatic redacted-summary opportunity review in progress.'}
-  if c.execute('UPDATE tax_drafts SET payload=?,revision=revision+1 WHERE id=? AND revision=?',(a.seal(payload),row['id'],row['revision'])).rowcount!=1:c.rollback();continue
+  c.execute('INSERT OR REPLACE INTO tax_auto_reviews VALUES(?,?)',(row['id'],a.seal({'requested':now,'state':'running','digest':digest,'notice':'Automatic redacted-summary review in progress.'})))
   c.execute('INSERT INTO tax_ai_runs VALUES(?,?,?)',(str(uuid.uuid4()),job['owner'],now));c.commit()
   processed+=1
   try:result={'requested':now,'state':'completed','suggestions':tax_ai(data,row['year']),'notice':'Automatic AI suggestions are unverified eligibility/documentation questions. No benefit is claimed and no calculated amount is changed.'};state='completed'
@@ -438,10 +444,9 @@ def process_suggestions(c,allowed_owners,limit=3):
   latest=c.execute('SELECT * FROM tax_drafts WHERE id=?',(row['id'],)).fetchone()
   if latest:
    current=a.unseal(latest['payload'])
-   if current.get('auto_ai_consent') and current.get('data')==data:
-    current['ai_review']=result
-    if c.execute('UPDATE tax_drafts SET payload=?,revision=revision+1 WHERE id=? AND revision=?',(a.seal(current),row['id'],latest['revision'])).rowcount!=1:state='outdated'
-   else:state='outdated'
+   if not current.get('auto_ai_consent') or current.get('data')!=data:state='outdated';result={'requested':now,'state':state,'notice':'Preparation changed or consent was disabled; suggestions were not applied.'}
+   result['digest']=digest
+   c.execute('INSERT OR REPLACE INTO tax_auto_reviews VALUES(?,?)',(row['id'],a.seal(result)))
   else:state='cancelled'
   c.execute('UPDATE tax_suggestion_jobs SET state=?,finished=? WHERE id=?',(state,int(time.time()),job['id']));a.audit(c,job['owner'],'Automatic tax opportunity review '+state);c.commit()
  return processed

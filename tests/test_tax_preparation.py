@@ -73,7 +73,7 @@ class TaxPreparationTests(unittest.TestCase):
   self.assertEqual(saved['ai_suggestion_status'],'queued')
   with patch.dict(os.environ,{'DOBHRAP_ENABLE_TAX_AI':'1','OPENAI_API_KEY':'test-key','TAX_AI_MODEL':'test-model'}),patch.object(t,'tax_ai',return_value=[{'topic':'Documents','question':'Did you check eligible deductions?'}]):
    with app.connect() as c:t.process_suggestions(c,{1:self.user})
-  updated=self.call('open',{'id':d['id']});self.assertEqual(updated['data'],saved['data']);self.assertEqual(updated['ai_review']['state'],'completed')
+  updated=self.call('open',{'id':d['id']});self.assertEqual(updated['data'],saved['data']);self.assertEqual(updated['revision'],saved['revision']);self.assertEqual(updated['ai_review']['state'],'completed')
   stopped=self.save(updated,updated['data'],auto_ai_consent=False);self.assertFalse(stopped['auto_ai_consent'])
  def test_documents_encrypt_download_delete_and_fake_type(self):
   d=self.create();raw=b'%PDF-1.4 fixture'
