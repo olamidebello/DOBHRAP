@@ -190,6 +190,13 @@
         mode: '0644'
         content: |
           limit_req_zone $binary_remote_addr zone=dobhrap_login:10m rate=5r/m;
+    - name: Retire competing domain entries with backups and syntax validation
+      ansible.builtin.script:
+        cmd: "retire-domain.py {{ domain }} /etc/nginx/sites-available/{{ domain }}"
+        executable: python3
+      when: replace_domain_config | bool
+      register: domain_cleanup
+      changed_when: "'Updated ' in domain_cleanup.stdout"
     - name: Install domain configuration
       ansible.builtin.copy:
         dest: "/etc/nginx/sites-available/{{ domain }}"
@@ -244,6 +251,21 @@
       ansible.builtin.uri:
         url: http://127.0.0.1:{{ app_port }}/health
         status_code: 200
+    - name: Verify public HTTPS serves the business suite
+      ansible.builtin.uri:
+        url: "https://{{ domain }}/"
+        return_content: true
+        status_code: 200
+      register: public_page
+      retries: 5
+      delay: 3
+      until: public_page.status == 200 and '/assets/oob-logo.png' in public_page.content
+    - name: Verify public branding asset
+      ansible.builtin.uri:
+        url: "https://{{ domain }}/assets/oob-logo.png"
+        status_code: 200
+      register: public_logo
+      failed_when: public_logo.status != 200 or public_logo.content_type != 'image/png'
   handlers:
     - name: Restart DOBHRAP
       ansible.builtin.systemd:
