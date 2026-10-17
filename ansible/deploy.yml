@@ -4,6 +4,7 @@
   become: true
   vars:
     app_root: /opt/dobhrap
+    service_user: dobhrap-app
     domain: olamideolatayobello.com
     app_port: 18081
     replace_domain_config: false
@@ -57,18 +58,30 @@
         name: [python3, python3-venv, nginx, certbot, python3-certbot-nginx]
         update_cache: true
         state: present
-    - name: Create service account
+    - name: Inspect dedicated application account
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ service_user }}"
+        fail_key: false
+    - name: Create dedicated application group
+      ansible.builtin.group:
+        name: "{{ service_user }}"
+        system: true
+    - name: Create dedicated application account only when absent
       ansible.builtin.user:
-        name: dobhrap
+        name: "{{ service_user }}"
+        group: "{{ service_user }}"
         system: true
         home: "{{ app_root }}"
+        create_home: false
         shell: /usr/sbin/nologin
+      when: ansible_facts.getent_passwd[service_user] is none
     - name: Prepare release and persistent directories
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: directory
         owner: "{{ item.owner }}"
-        group: dobhrap
+        group: "{{ service_user }}"
         mode: "{{ item.mode }}"
       loop:
         - {path: "{{ app_root }}", owner: root, mode: '0750'}
@@ -76,14 +89,14 @@
         - {path: "{{ app_root }}/releases/{{ release_id }}", owner: root, mode: '0750'}
         - {path: "{{ app_root }}/releases/{{ release_id }}/assets", owner: root, mode: '0750'}
         - {path: "{{ app_root }}/releases/{{ release_id }}/tests", owner: root, mode: '0750'}
-        - {path: /var/lib/dobhrap, owner: dobhrap, mode: '0700'}
-        - {path: /var/backups/dobhrap, owner: dobhrap, mode: '0700'}
+        - {path: /var/lib/dobhrap, owner: "{{ service_user }}", mode: '0700'}
+        - {path: /var/backups/dobhrap, owner: "{{ service_user }}", mode: '0700'}
     - name: Copy versioned source
       ansible.builtin.copy:
         src: "{{ app_source }}/{{ item }}"
         dest: "{{ app_root }}/releases/{{ release_id }}/{{ item }}"
         owner: root
-        group: dobhrap
+        group: "{{ service_user }}"
         mode: '0640'
       loop: [assets/oob-logo.png, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py]
     - name: Create isolated build environment and install pinned dependencies
@@ -154,12 +167,28 @@
         state: stopped
       loop: [dobhrap-worker.timer, dobhrap-worker.service]
       failed_when: false
+    - name: Inspect installed application services
+      ansible.builtin.service_facts:
+    - name: Stop existing web and backup services before data ownership migration
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop: [dobhrap.service, dobhrap-backup.timer, dobhrap-backup.service]
+      when: item in ansible_facts.services
+    - name: Assign persistent application data to dedicated service account
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: "{{ service_user }}"
+        group: "{{ service_user }}"
+        recurse: true
+        state: directory
+      loop: [/var/lib/dobhrap, /var/backups/dobhrap]
     - name: Save pre-migration database snapshot if present
       ansible.builtin.command:
         argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", "{{ app_root }}/releases/{{ release_id }}/backup.py"]
       environment:
         DOBHRAP_DB: /var/lib/dobhrap/dobhrap.db
-      become_user: dobhrap
+      become_user: "{{ service_user }}"
       changed_when: false
     - name: Activate tested source atomically
       ansible.builtin.file:
@@ -177,8 +206,8 @@
           After=network.target
           [Service]
           Type={{ item.type }}
-          User=dobhrap
-          Group=dobhrap
+          User={{ service_user }}
+          Group={{ service_user }}
           WorkingDirectory={{ app_root }}/current
           EnvironmentFile=/etc/dobhrap.env
           ExecStart={{ app_root }}/current/venv/bin/python {{ app_root }}/current/{{ item.script }}
