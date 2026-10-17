@@ -129,3 +129,25 @@ ansible-playbook -i 'dobhrap,' -c local ansible/production-marketplace-oob.yml
 This imports deployment, GUI/key provisioning, six-year readiness, migrations and product seeding. It publishes new starter offers, preserves existing edits and checks live merchant accounts/webhook signing for published settlement currencies. Missing live credentials or controls cause a clear readiness failure after the app and products are deployed. Coupons remain usable. To deploy offers in coupon-only/test mode, explicitly pass `-e marketplace_require_live_checkout=false`. Set `tax_preparation_price_usd`, `tax_amendment_price_usd`, `tax_publish_products` or `tax_overwrite_product_prices` to override seed defaults.
 
 `ansible/tax-years-oob.yml` deploys and verifies the six-year GUI/API and saves `/var/log/oob-tax-years-readiness.json`. Passing `-e tax_require_filing=true` deliberately fails unless complete filing capability exists; no tax records are transmitted. Individual IRS electronic filing does not cover every old year. A validated full return package, eligible year/method, taxpayer signature/authorization and an authorized provider are still required. Production merchant readiness is saved in `/var/log/oob-marketplace-production-readiness.json`; a real completed checkout remains necessary to verify end-to-end payment delivery.
+
+
+## Super administrator commerce controls
+
+Sign in with the `super_admin` role. The **Commerce administration** navigation and the **Super admin** console provide:
+
+- **Commerce dashboard:** published offers, recent orders, fulfillment, prepaid terms and verified live gross totals separated by currency. Totals cover at most the latest 500 orders and exclude refunds, fees, disputes, coupons and test orders.
+- **Marketplace administration:** create/edit/publish/archive products and service offers, set prices and service codes, and generate editable tax-year starter offers.
+- **Subscription plans:** create/edit/publish/archive prepaid plans with a fixed 1–366 day term. Prices are minor units (4900 means USD 49.00). Plans use existing verified Stripe/Paystack checkout or eligible full-service coupons. Existing orders retain their purchased term when a plan changes. Tax-year access remains a one-time offer.
+- **Subscription management:** search/export subscriptions across workspaces and cancel service access immediately. Customers can view and cancel their own terms under Purchased services. Cancellation suspends service access and does not issue a refund. Each additional purchase starts a separate term at fulfillment; terms do not automatically stack. There are no automatic recurring charges or scheduled renewals. Purchased plans create fulfillment records; they do not unlock unrelated application modules.
+- **Payment gateways:** inspect test/live readiness, signing-key readiness and last signed events. Open Provider provisioning & keys to save encrypted keys, test merchant connections, and provision Stripe webhooks after confirming the current administrator password. Refunds/disputes remain merchant-dashboard operations.
+- **Store settings:** change store name, description and support email; pause or resume new gateway purchases and coupon redemptions. Existing payment verification and services continue when purchases are paused. Preview the store from this page.
+- **Purchased services:** set fulfillment to new, in progress, completed or suspended. Expired/cancelled subscription terms cannot be restored through fulfillment controls.
+
+Terms are checked on authenticated requests and by the marketplace scheduler. The database migration preserves existing offers, orders, services and credentials. Deploy through the existing repair/provisioning playbooks; no separate manual SQL migration is needed.
+
+
+### Multiple documents and individual classifications
+
+In Tax analyst or a preparation's Documents and import review slide, select multiple PDF/PNG/JPEG files. A queue lists each filename with its own document-type dropdown and optional custom record type. Defaults apply to newly selected files; edit individual rows for mixed batches. Custom record types override the dropdown. Remove unwanted files before clicking **Upload selected documents**. Files upload sequentially; successful files leave the queue, while failed files remain with an error for correction/retry. Maximum file size is 2 MB. Existing owner/return storage limits still apply. Pending uploads block navigation until uploaded or removed.
+
+Tax analyst can analyze uploaded files when configured and the user explicitly consents. Direct uploads to preparation store documents and their classifications privately; they do not automatically extract figures. Choose Tax analyst for extraction and review/approve its results before compilation.

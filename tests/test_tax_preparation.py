@@ -77,8 +77,10 @@ class TaxPreparationTests(unittest.TestCase):
   stopped=self.save(updated,updated['data'],auto_ai_consent=False);self.assertFalse(stopped['auto_ai_consent'])
  def test_documents_encrypt_download_delete_and_fake_type(self):
   d=self.create();raw=b'%PDF-1.4 fixture'
-  doc=self.call('document',{'id':d['id'],'name':'fixture.pdf','type':'application/pdf','base64':base64.b64encode(raw).decode()})
+  doc=self.call('document',{'id':d['id'],'name':'fixture.pdf','type':'application/pdf','document_type':'W-2','base64':base64.b64encode(raw).decode()})
   with app.connect() as c:self.assertNotIn('PDF-1.4',c.execute('SELECT payload FROM tax_draft_documents').fetchone()[0])
+  self.assertEqual(self.call('open',{'id':d['id']})['documents'][0]['document_type'],'W-2')
+  with self.assertRaises(a.ServiceError):self.call('document',{'id':d['id'],'name':'bad-type.pdf','type':'application/pdf','document_type':'x'*101,'base64':base64.b64encode(raw).decode()})
   self.assertEqual(base64.b64decode(self.call('document-download',{'id':d['id'],'document_id':doc['id']})['base64']),raw)
   with self.assertRaises(a.ServiceError):self.call('document',{'id':d['id'],'name':'bad.pdf','type':'application/pdf','base64':base64.b64encode(b'<script>').decode()})
   self.call('document-delete',{'id':d['id'],'document_id':doc['id']})

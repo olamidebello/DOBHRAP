@@ -31,6 +31,8 @@ def dispatch(path,method,body,c,user,tenant_id):
   return [dict(r) for r in c.execute('SELECT r.*,p.label,o.name,o.service_code,o.currency,o.amount FROM coupon_redemptions r JOIN service_coupons p ON p.id=r.coupon_id JOIN market_orders o ON o.id=r.order_id ORDER BY r.created DESC LIMIT 500')]
  if route!='redeem' or method!='POST':raise a.ServiceError('Coupon route not found',404)
  if user['role'] not in ('admin','super_admin'):raise a.ServiceError('Account administrator required to purchase',403)
+ import marketplace as market
+ market.require_open(c)
  code=str(body.get('code','')).strip().upper()
  if not re.fullmatch('[A-Z0-9-]{8,80}',code):raise a.ServiceError('Coupon is invalid or unavailable')
  request_key=str(uuid.UUID(str(body.get('request_key',''))));digest=hashlib.sha256(code.encode()).hexdigest();now=int(time.time());c.execute('BEGIN IMMEDIATE')
@@ -47,6 +49,8 @@ def dispatch(path,method,body,c,user,tenant_id):
  user_uses=c.execute('SELECT count(*) FROM coupon_redemptions WHERE coupon_id=? AND owner=?',(coupon['id'],user['id'])).fetchone()[0]
  if uses>=coupon['max_uses'] or user_uses>=coupon['per_user']:raise a.ServiceError('Coupon redemption limit reached',409)
  order=str(uuid.uuid4());c.execute("INSERT INTO market_orders(id,tenant_id,owner,product_id,name,service_code,amount,currency,gateway,environment,request_key,state,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(order,tenant_id,user['id'],product['id'],product['name'],product['service_code'],0,product['currency'],'coupon','coupon',request_key,'fulfilled',now))
+ market.snapshot_terms(c,order,product['id'])
  c.execute('INSERT INTO coupon_redemptions VALUES(?,?,?,?,?)',(order,coupon['id'],user['id'],tenant_id,now))
  c.execute('INSERT INTO market_services(order_id,tenant_id,service_code,name,environment,status,activated) VALUES(?,?,?,?,?,?,?)',(order,tenant_id,product['service_code'],product['name'],'coupon','active',now));a.audit(c,user['id'],'Coupon redeemed for service '+order)
+ market.activate_subscription(c,order)
  return {'id':order,'state':'fulfilled','reused':False,'notice':'Service price fully covered by coupon; no gateway charge.'}

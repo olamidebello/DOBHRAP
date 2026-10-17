@@ -98,3 +98,47 @@ class MarketplaceTests(unittest.TestCase):
         with patch.object(m,'provider',side_effect=a.ServiceError('private-key')):
             with self.assertRaises(a.ServiceError):self.purchase()
         self.assertNotIn('private-key',self.call('orders')[0]['error'])
+
+    def test_store_pause_blocks_new_gateway_and_coupon_purchases(self):
+        import coupons
+        with self.assertRaises(a.ServiceError):self.call('store',{'name':'Bad','description':'','support_email':'','open':False})
+        self.call('store',{'name':'Private store','description':'Service desk','support_email':'help@example.com','open':False},self.admin)
+        self.assertEqual(self.call('store')['name'],'Private store')
+        with self.assertRaises(a.ServiceError):self.purchase()
+        with app.connect() as c,self.assertRaises(a.ServiceError):
+            coupons.dispatch('/api/coupons/redeem','POST',{},c,self.buyer,self.tid)
+        self.assertEqual(self.call('orders'),[])
+
+    def test_prepaid_term_snapshots_expiration_and_permissions(self):
+        body={'name':'Monthly support','description':'30 day service','service_code':'monthly_support','amount':2500,'currency':'USD','active':True,'days':30}
+        with self.assertRaises(a.ServiceError):self.call('plans',body)
+        self.product=self.call('plans',body,self.admin)['id']
+        with patch.object(m,'provider',return_value={'id':'cs_test_fixture','url':'https://checkout.stripe.com/c/test'}):order=self.purchase()
+        self.assertEqual(self.call('subscriptions'),[])
+        self.call('plans',{**body,'id':self.product,'days':90},self.admin)
+        with patch.object(m,'provider',return_value=self.paid(order['id'])):self.call('verify',{'id':order['id']})
+        subs=self.call('subscriptions');self.assertEqual(len(subs),1)
+        self.assertAlmostEqual(subs[0]['ends']-time.time(),30*86400,delta=3)
+        self.assertEqual(self.call('subscriptions',tid=999),[])
+        with self.assertRaises(a.ServiceError):self.call('subscription-action',{'order_id':order['id'],'action':'cancel'},tid=999)
+        with app.connect() as c:c.execute('UPDATE market_subscriptions SET ends=?',(int(time.time())-1,))
+        self.assertEqual(self.call('subscriptions')[0]['state'],'expired')
+        self.assertEqual(self.call('services')[0]['status'],'suspended')
+        with self.assertRaises(a.ServiceError):self.call('service-action',{'order_id':order['id'],'work_state':'completed'},self.admin)
+        with self.assertRaises(a.ServiceError):self.call('plans',{**body,'id':self.product,'service_code':'tax_preparation_2026'},self.admin)
+        with self.assertRaises(a.ServiceError):self.call('products',{**body,'id':self.product,'service_code':'tax_preparation_2026'},self.admin)
+
+    def test_coupon_prepaid_plan_cancellation_is_idempotent(self):
+        import coupons
+        self.product=self.call('plans',{'name':'Annual support','description':'Prepaid','service_code':'annual_support','amount':2500,'currency':'USD','active':True,'days':365},self.admin)['id']
+        with app.connect() as c:
+            voucher=coupons.dispatch('/api/coupons/manage','POST',{'label':'Plan voucher','service_code':'annual_support','expires':int(time.time())+3600,'max_uses':1,'per_user':1,'active':True},c,self.admin,self.tid)
+        body={'code':voucher['code'],'product_id':self.product,'request_key':str(uuid.uuid4())}
+        with app.connect() as c:order=coupons.dispatch('/api/coupons/redeem','POST',body,c,self.buyer,self.tid)
+        self.assertEqual(self.call('subscriptions')[0]['environment'],'coupon')
+        for _ in range(2):self.call('subscription-action',{'order_id':order['id'],'action':'cancel'})
+        self.assertEqual(self.call('subscriptions')[0]['state'],'cancelled')
+        self.assertEqual(self.call('services')[0]['status'],'suspended')
+        with app.connect() as c:coupons.dispatch('/api/coupons/redeem','POST',body,c,self.buyer,self.tid)
+        self.assertEqual(len(self.call('subscriptions')),1)
+        self.assertEqual(self.call('subscriptions')[0]['state'],'cancelled')

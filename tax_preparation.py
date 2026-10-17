@@ -207,7 +207,7 @@ def view(c,row,data):
           'completed':data.get('completed',[]),'review':review(data.get('data',{}),data.get('completed',[]),row['year']),'sources':tax_rules.sources(row['year'])}
  docs=[]
  for d in c.execute('SELECT * FROM tax_draft_documents WHERE return_id=? ORDER BY created',(row['id'],)):
-  meta=a.unseal(d['payload']);docs.append({'id':d['id'],'name':meta['name'],'type':meta['type'],'size':d['size']})
+  meta=a.unseal(d['payload']);docs.append({'id':d['id'],'name':meta['name'],'type':meta['type'],'document_type':meta.get('document_type','Other'),'size':d['size']})
  payload['auto_ai_consent']=data.get('auto_ai_consent',False);job=c.execute('SELECT state FROM tax_suggestion_jobs WHERE return_id=? ORDER BY requested DESC,rowid DESC LIMIT 1',(row['id'],)).fetchone();payload['ai_suggestion_status']=job['state'] if job else 'off';payload['documents']=docs;ai=latest_ai_review(c,row['id'],data)
  if ai.get('digest') and ai['digest']!=hashlib.sha256(json.dumps(data.get('data',{}),sort_keys=True).encode()).hexdigest():ai={'state':'outdated','notice':'Preparation changed; these AI suggestions require a new review.'}
  payload['ai_review']=ai;payload['refund_review']=data.get('refund_review',{});return payload
@@ -362,8 +362,10 @@ def dispatch(path,method,body,c,user):
   if not allowed.get(mime) or not 1<=len(raw)<=2_000_000:raise a.ServiceError('Upload a valid PDF, JPG or PNG up to 2 MB')
   total=c.execute('SELECT coalesce(sum(size),0) FROM tax_draft_documents WHERE return_id=?',(row['id'],)).fetchone()[0]
   if total+len(raw)>12_000_000:raise a.ServiceError('Document storage limit reached')
+  document_type=str(body.get('document_type','Other')).strip()
+  if not document_type or len(document_type)>100 or not document_type.isprintable():raise a.ServiceError('Choose or enter a document type of up to 100 printable characters')
   name=str(body.get('name','Document'))[:120].replace('/','_').replace('\\','_');did=str(uuid.uuid4())
-  c.execute('INSERT INTO tax_draft_documents VALUES(?,?,?,?,?)',(did,row['id'],a.seal({'name':name,'type':mime,'base64':base64.b64encode(raw).decode()}),len(raw),int(time.time())))
+  c.execute('INSERT INTO tax_draft_documents VALUES(?,?,?,?,?)',(did,row['id'],a.seal({'name':name,'type':mime,'document_type':document_type,'base64':base64.b64encode(raw).decode()}),len(raw),int(time.time())))
   a.audit(c,user['id'],'Private tax document added '+did);return {'id':did}
  if route in ('document-download','document-delete'):
   doc=c.execute('SELECT * FROM tax_draft_documents WHERE id=? AND return_id=?',(body.get('document_id'),row['id'])).fetchone()

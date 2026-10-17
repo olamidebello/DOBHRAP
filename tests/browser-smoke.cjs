@@ -27,8 +27,19 @@ const assert=require('assert');
   assert.equal(await page.locator('#tax-fields input[name=first_name]').inputValue(),'Test');
   await page.locator('#tax-back').click();
   assert.equal(await page.locator('#tax-fields input[name=name]').inputValue(),'Browser tax worksheet');
+  await page.locator('#tax-step-links button').filter({hasText:'Documents and import review'}).click();
+  await page.locator('#tax-upload').setInputFiles([
+   {name:'Prep-W2.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 prep wages')},
+   {name:'Prep-receipt.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 prep receipt')}
+  ]);
+  await page.locator('#tax-upload-queue [data-upload-row]').first().locator('[data-upload-type]').selectOption('W-2');
+  await page.locator('#tax-upload-queue [data-upload-row]').nth(1).locator('[data-upload-custom]').fill('Donation receipt');
+  await page.locator('#tax-upload-selected').click();
+  await page.waitForFunction(()=>document.querySelectorAll('[data-tax-download]').length===2);
+  assert((await page.locator('#tax-documents').textContent()).includes('Donation receipt'));
   await page.locator('#nav [data-page=tax_analyst]').click();
   await page.locator('#analyst-file').setInputFiles({name:'Synthetic-statement.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 synthetic test document')});
+  await page.locator('#analyst-upload-selected').click();
   await page.locator('[data-analyst-edit]').first().click();
   await page.locator('#analyst-add').click();
   await page.locator('[data-analyst-row] input[name=date]').fill('2026-03-01');
@@ -52,7 +63,12 @@ const assert=require('assert');
    {name:'Synthetic-W2.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 synthetic W2')},
    {name:'Synthetic-1098.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 synthetic 1098')}
   ]);
+  assert.equal(await page.locator('#analyst-upload-queue [data-upload-row]').count(),2);
+  await page.locator('#analyst-upload-queue [data-upload-row]').nth(1).locator('[data-upload-custom]').fill('Mortgage interest evidence');
+  await page.locator('#analyst-upload-queue [data-upload-row]').nth(1).locator('[data-upload-type]').selectOption('1098');
+  await page.locator('#analyst-upload-selected').click();
   await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Batch finished: 2 uploaded'));
+  await page.locator('#analyst-groups').getByRole('heading',{name:'Mortgage interest evidence',exact:true}).waitFor();
   await page.locator('#analyst-groups').getByRole('heading',{name:'Custom tax collection',exact:true}).waitFor();
   await page.locator('[data-analyst-edit]').first().click();
   await page.locator('#analyst-add-tax-field').click();
@@ -152,6 +168,39 @@ const assert=require('assert');
   await page.locator('#nav [data-page=market_admin]').click();
   await page.locator('#seed-products-form button').click();
   await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Starter offers: 12 created'));
+  await page.locator('#nav [data-page=commerce_admin]').click();
+  await page.locator('#content').getByRole('heading',{name:'Commerce dashboard',exact:true}).waitFor();
+  await page.locator('#nav [data-page=store_admin]').click();
+  await page.locator('#store-settings input[name=name]').fill('Browser store');
+  await page.locator('#store-settings input[name=support_email]').fill('support@example.com');
+  await page.locator('#store-settings button').first().click();
+  await page.waitForFunction(()=>document.querySelector('#status').textContent==='Store settings saved');
+  await page.locator('#nav [data-page=subscription_plans]').click();
+  await page.locator('#plan-form input[name=name]').fill('Browser prepaid support');
+  await page.locator('#plan-form input[name=service_code]').fill('browser_prepaid');
+  await page.locator('#plan-form input[name=amount]').fill('4900');
+  await page.locator('#plan-form input[name=active]').check();
+  await page.locator('#plan-form button').first().click();
+  await page.locator('[data-edit-plan]').first().waitFor();
+  await page.locator('[data-edit-plan]').first().click();
+  assert.equal(await page.locator('#plan-form input[name=days]').inputValue(),'30');
+  await page.evaluate(async()=>{
+   const plan=(await api('market/plans')).find(p=>p.service_code==='browser_prepaid');
+   const voucher=await api('coupons/manage',{label:'Prepaid browser voucher',service_code:plan.service_code,expires:Math.floor(Date.now()/1000)+3600,max_uses:1,per_user:1,active:true});
+   await api('coupons/redeem',{code:voucher.code,product_id:plan.id,request_key:crypto.randomUUID()});
+  });
+  await page.locator('#nav [data-page=subscriptions_admin]').click();
+  await page.locator('#subscription-search').waitFor();
+  await page.locator('[data-cancel-sub]').first().waitFor();
+  page.once('dialog',dialog=>dialog.accept());
+  await page.locator('[data-cancel-sub]').first().click();
+  await page.waitForFunction(()=>document.querySelector('#status').textContent==='Subscription cancelled; no refund issued');
+  assert((await page.locator('#subscription-list').textContent()).includes('cancelled'));
+
+  await page.locator('#nav [data-page=payment_gateways]').click();
+  await page.locator('#content').getByRole('heading',{name:'Gateway readiness',exact:true}).waitFor();
+  await page.locator('#nav [data-page=marketplace]').click();
+  await page.locator('#content').getByRole('heading',{name:'Browser store',exact:true}).waitFor();
   await page.locator('#nav [data-page=provider_keys]').click();
   await page.locator('#provider-form').waitFor();
   assert.equal(await page.locator('#provider-form input[name=OPENAI_API_KEY]').inputValue(),'');

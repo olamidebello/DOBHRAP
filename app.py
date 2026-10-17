@@ -239,6 +239,7 @@ class Handler(BaseHTTPRequestHandler):
     tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tenant_id,)).fetchone()
     if not tenant:self.reply(404,{'error':'Workspace not found'});return
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
+    marketplace.refresh_subscriptions(c)
     tax_services.enforce(c,path,self.command,body,tenant,u)
     if path=='/api/tax-services/status' and self.command=='GET':self.reply(200,tax_services.status(c,tenant_id,u));return
     if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':{} if tenant['service_mode']=='tax_only' and u['role']!='super_admin' else MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return

@@ -34,7 +34,38 @@ def initialize(c):
       order_id TEXT PRIMARY KEY,tenant_id INTEGER NOT NULL,service_code TEXT NOT NULL,
       name TEXT NOT NULL,environment TEXT NOT NULL,status TEXT NOT NULL,
       work_state TEXT NOT NULL DEFAULT 'new',activated INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS market_store(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL,description TEXT NOT NULL,support_email TEXT NOT NULL,open INTEGER NOT NULL);
+    INSERT OR IGNORE INTO market_store VALUES(1,'OOB service store','','',1);
+    CREATE TABLE IF NOT EXISTS market_plan_terms(product_id TEXT PRIMARY KEY,days INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS market_order_terms(order_id TEXT PRIMARY KEY,days INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS market_subscriptions(order_id TEXT PRIMARY KEY,ends INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'active');
     ''')
+
+
+def store(c):return dict(c.execute('SELECT name,description,support_email,open FROM market_store WHERE id=1').fetchone())
+
+
+def require_open(c):
+    if not store(c)['open']:raise a.ServiceError('Store purchases are temporarily paused',503)
+
+
+def snapshot_terms(c,oid,pid):
+    term=c.execute('SELECT days FROM market_plan_terms WHERE product_id=?',(pid,)).fetchone()
+    if term:c.execute('INSERT OR IGNORE INTO market_order_terms VALUES(?,?)',(oid,term['days']))
+
+
+def activate_subscription(c,oid):
+    term=c.execute('SELECT days FROM market_order_terms WHERE order_id=?',(oid,)).fetchone()
+    if term:
+        service=c.execute('SELECT activated FROM market_services WHERE order_id=?',(oid,)).fetchone()
+        if service:c.execute('INSERT OR IGNORE INTO market_subscriptions(order_id,ends) VALUES(?,?)',(oid,service['activated']+term['days']*86400))
+
+
+def refresh_subscriptions(c):
+    owned=not c.in_transaction
+    c.execute("UPDATE market_subscriptions SET state='expired' WHERE state='active' AND ends<=?",(int(time.time()),))
+    c.execute("UPDATE market_services SET status='suspended',work_state='suspended' WHERE order_id IN (SELECT order_id FROM market_subscriptions WHERE state IN ('expired','cancelled')) AND status!='suspended'")
+    if owned:c.commit()
 
 
 def enabled():return settings.get('DOBHRAP_ENABLE_MARKETPLACE')=='1'
@@ -60,7 +91,7 @@ def readiness():
         gateways.append({'id':gateway,'currency':currency,'configured':configured,
                          'signing_key_configured':bool(settings.get('STRIPE_WEBHOOK_SECRET')) if gateway=='stripe' else configured})
     return {'enabled':enabled(),'environment':settings.get('PAYMENTS_ENV','test'),'gateways':gateways,
-            'notice':'One-time platform service offers. Test purchases create test service records. No recurring billing or reseller payouts.'}
+            'notice':'One-time offers and prepaid subscription terms. Renewal requires another purchase; no automatic recurring charges. Test purchases create test service records.'}
 
 
 def base_url():
@@ -96,6 +127,7 @@ def checkout_url(value,gateway):
 
 
 def checkout(c,body,user,tenant_id):
+    require_open(c)
     if not enabled():raise a.ServiceError('Marketplace checkout is disabled',503)
     gateway=body.get('gateway');key(gateway);env=environment()
     request_key=str(uuid.UUID(str(body.get('request_key',''))))
@@ -114,6 +146,7 @@ def checkout(c,body,user,tenant_id):
         oid=str(uuid.uuid4())
         c.execute('INSERT INTO market_orders(id,tenant_id,owner,product_id,name,service_code,amount,currency,gateway,environment,request_key,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                   (oid,tenant_id,user['id'],product['id'],product['name'],product['service_code'],product['amount'],product['currency'],gateway,env,request_key,now))
+        snapshot_terms(c,oid,product['id'])
         order=c.execute('SELECT * FROM market_orders WHERE id=?',(oid,)).fetchone()
     c.execute("UPDATE market_orders SET state='creating',next_check=? WHERE id=?",(now+90,order['id']));c.commit()
     try:
@@ -167,6 +200,7 @@ def verify(c,order_id):
     c.execute('INSERT OR IGNORE INTO market_services(order_id,tenant_id,service_code,name,environment,status,activated) VALUES(?,?,?,?,?,?,?)',
               (row['id'],row['tenant_id'],row['service_code'],row['name'],row['environment'],'active' if row['environment']=='live' else 'test_active',int(time.time())))
     updated=c.execute("UPDATE market_orders SET state=?,error='',next_check=0 WHERE id=? AND state NOT IN ('fulfilled','test_fulfilled','payment_review')",(state,row['id'])).rowcount
+    activate_subscription(c,row['id'])
     if updated:a.audit(c,0,'Marketplace payment verified and service activated '+row['id'])
     return {'id':row['id'],'state':state}
 
@@ -210,8 +244,34 @@ def webhook(c,gateway,raw,headers):
 def dispatch(path,method,body,c,user,tenant_id):
     if not path.startswith('/api/market/'):return None
     route=path[len('/api/market/'):];admin=user['role']=='super_admin'
+    refresh_subscriptions(c)
+    if route=='store':
+        if method=='GET':return store(c)
+        if not admin:raise a.ServiceError('Super administrator required',403)
+        name=str(body.get('name','')).strip();description=str(body.get('description','')).strip();email=str(body.get('support_email','')).strip()
+        if not name or len(name)>120 or len(description)>2000 or len(email)>254 or (email and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email)) or type(body.get('open')) is not bool:raise a.ServiceError('Enter valid store details and purchase availability')
+        c.execute('UPDATE market_store SET name=?,description=?,support_email=?,open=? WHERE id=1',(name,description,email,int(body['open'])))
+        a.audit(c,user['id'],'Store settings updated');return store(c)
+    if route=='subscriptions' and method=='GET':
+        return [dict(r) for r in c.execute('SELECT s.*,o.name,o.owner,o.tenant_id,o.environment,o.product_id FROM market_subscriptions s JOIN market_orders o ON o.id=s.order_id'+('' if admin else ' WHERE o.tenant_id=? AND o.owner=?')+' ORDER BY s.ends DESC LIMIT 500',() if admin else (tenant_id,user['id']))]
+    if route=='subscription-action' and method=='POST':
+        row=c.execute('SELECT s.*,o.tenant_id,o.owner FROM market_subscriptions s JOIN market_orders o ON o.id=s.order_id WHERE s.order_id=?',(body.get('order_id'),)).fetchone()
+        if not row or (not admin and (row['tenant_id']!=tenant_id or row['owner']!=user['id'])):raise a.ServiceError('Subscription not found',404)
+        if body.get('action')!='cancel':raise a.ServiceError('Unsupported subscription action')
+        c.execute("UPDATE market_subscriptions SET state='cancelled' WHERE order_id=? AND state='active'",(row['order_id'],));refresh_subscriptions(c)
+        a.audit(c,user['id'],'Prepaid subscription cancelled '+row['order_id']);return {'ok':True,'notice':'Access suspended. No refund or provider charge was issued.'}
+    if route=='plans':
+        if method=='GET':return [dict(r) for r in c.execute('SELECT p.*,t.days FROM market_products p JOIN market_plan_terms t ON t.product_id=p.id'+('' if admin else ' WHERE p.active=1')+' ORDER BY p.name')]
+        if not admin:raise a.ServiceError('Super administrator required',403)
+        days=body.get('days')
+        if type(days) is not int or not 1<=days<=366:raise a.ServiceError('Term must contain 1–366 days')
+        pid=body.get('id')
+        if pid and c.execute('SELECT 1 FROM market_products WHERE id=?',(pid,)).fetchone() and not c.execute('SELECT 1 FROM market_plan_terms WHERE product_id=?',(pid,)).fetchone():raise a.ServiceError('Create a separate plan instead of converting a one-time offer',409)
+        if str(body.get('service_code','')).startswith('tax_'):raise a.ServiceError('Tax-year preparation access must remain a one-time offer')
+        result=dispatch('/api/market/products','POST',body,c,user,tenant_id)
+        c.execute('INSERT INTO market_plan_terms VALUES(?,?) ON CONFLICT(product_id) DO UPDATE SET days=excluded.days',(result['id'],days));return result
     if route=='status' and method=='GET':
-        state=readiness()
+        state=readiness();state['store']=store(c)
         if admin:
             for gateway in state['gateways']:
                 gateway['last_signed_event']=c.execute('SELECT max(created) FROM market_events WHERE gateway=?',(gateway['id'],)).fetchone()[0]
@@ -220,7 +280,7 @@ def dispatch(path,method,body,c,user,tenant_id):
         if not admin:raise a.ServiceError('Super administrator required',403)
         return seed_tax_products(c,body.get('preparation_price','49.00'),body.get('amendment_price','79.00'),body.get('publish',True),body.get('overwrite',False))
     if route=='products':
-        if method=='GET':return [dict(r) for r in c.execute('SELECT * FROM market_products'+('' if admin else ' WHERE active=1')+' ORDER BY name')]
+        if method=='GET':return [dict(r) for r in c.execute('SELECT *, (SELECT days FROM market_plan_terms t WHERE t.product_id=market_products.id) days FROM market_products'+('' if admin else ' WHERE active=1')+' ORDER BY name')]
         if not admin:raise a.ServiceError('Super administrator required',403)
         if body.get('action')=='archive':
             if c.execute('UPDATE market_products SET active=0 WHERE id=?',(body.get('id'),)).rowcount!=1:raise a.ServiceError('Offer not found',404)
@@ -231,6 +291,7 @@ def dispatch(path,method,body,c,user,tenant_id):
         if type(amount) is not int or not 50<=amount<=100_000_000 or currency not in list_currencies() or currency in ('XTS','XXX'):raise a.ServiceError('Price must be 50–100000000 minor units in a recognized currency')
         if not isinstance(body.get('active'),bool):raise a.ServiceError('Choose whether the offer is active')
         pid=body.get('id') or str(uuid.uuid4())
+        if code.startswith('tax_') and c.execute('SELECT 1 FROM market_plan_terms WHERE product_id=?',(pid,)).fetchone():raise a.ServiceError('Subscription plans cannot grant tax-year access')
         c.execute('INSERT INTO market_products VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,service_code=excluded.service_code,amount=excluded.amount,currency=excluded.currency,active=excluded.active',
                   (pid,name,description,code,amount,currency,int(body['active'])))
         a.audit(c,user['id'],'Marketplace offer saved '+pid);return {'id':pid}
@@ -241,6 +302,7 @@ def dispatch(path,method,body,c,user,tenant_id):
     if route=='service-action' and method=='POST':
         if not admin:raise a.ServiceError('Super administrator required',403)
         if body.get('work_state') not in ('new','in_progress','completed','suspended'):raise a.ServiceError('Invalid fulfillment state')
+        if c.execute("SELECT 1 FROM market_subscriptions WHERE order_id=? AND state!='active'",(body.get('order_id'),)).fetchone():raise a.ServiceError('Expired or cancelled subscription cannot be reactivated through fulfillment',409)
         if not c.execute('SELECT 1 FROM market_services WHERE order_id=?',(body.get('order_id'),)).fetchone():raise a.ServiceError('Service not found',404)
         c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment IN (\'live\',\'coupon\') THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
         a.audit(c,user['id'],'Marketplace fulfillment updated '+str(body.get('order_id')));return {'ok':True}
@@ -255,6 +317,7 @@ def dispatch(path,method,body,c,user,tenant_id):
 
 def run_all():
     import app
+    with app.connect() as c:refresh_subscriptions(c)
     if not enabled():return
     now=int(time.time())
     with app.connect() as c:
