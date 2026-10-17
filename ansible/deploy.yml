@@ -15,19 +15,32 @@
     enable_live_payroll: false
     enable_efile_transmission: false
   pre_tasks:
-    - name: Validate deployment configuration
-      ansible.builtin.assert:
-        that:
-          - admin_password is defined
-          - admin_password | length >= 14
-          - domain is match('^[A-Za-z0-9.-]+$')
-          - plaid_env in ['sandbox', 'production']
-          - check_env in ['sandbox', 'production']
-          - not enable_live_banking or ((plaid_client_id | default('') | length > 0) and (plaid_secret | default('') | length > 0))
-          - not enable_live_payroll or (check_api_key | default('') | length > 0)
-          - not enable_efile_transmission or ((efile_gateway_url | default('') is match('^https://')) and (efile_gateway_token | default('') | length > 0))
-        fail_msg: Use Vault for credentials and configure each provider before enabling live operations.
+    - name: Evaluate configuration without exposing credentials
+      ansible.builtin.set_fact:
+        deployment_checks:
+          - name: Initial administrator password must contain at least 14 characters
+            valid: "{{ (admin_password | default('') | string | length) >= 14 }}"
+          - name: Domain must contain only letters, digits, dots and hyphens
+            valid: "{{ domain is match('^[A-Za-z0-9.-]+$') }}"
+          - name: Plaid environment must be sandbox or production
+            valid: "{{ plaid_env in ['sandbox', 'production'] }}"
+          - name: Check environment must be sandbox or production
+            valid: "{{ check_env in ['sandbox', 'production'] }}"
+          - name: Live banking requires Plaid client ID and secret
+            valid: "{{ not (enable_live_banking | bool) or ((plaid_client_id | default('') | length > 0) and (plaid_secret | default('') | length > 0)) }}"
+          - name: Live payroll requires a Check API key
+            valid: "{{ not (enable_live_payroll | bool) or (check_api_key | default('') | length > 0) }}"
+          - name: E-filing transmission requires an HTTPS gateway and token
+            valid: "{{ not (enable_efile_transmission | bool) or ((efile_gateway_url | default('') is match('^https://')) and (efile_gateway_token | default('') | length > 0)) }}"
       no_log: true
+    - name: Validate deployment settings with safe diagnostic messages
+      ansible.builtin.assert:
+        that: item.valid | bool
+        fail_msg: "{{ item.name }}. Correct this setting and rerun deployment."
+        quiet: true
+      loop: "{{ deployment_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
     - name: Hash branding asset on controller
       ansible.builtin.stat:
         path: "{{ app_source }}/assets/oob-logo.png"
