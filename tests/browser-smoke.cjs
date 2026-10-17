@@ -45,6 +45,24 @@ const assert=require('assert');
   await page.locator('[data-analyst-return]').first().click();
   await page.locator('[data-tax-open]').nth(1).waitFor();
   assert.equal(await page.locator('[data-tax-open]').count(),2);
+  await page.locator('#nav [data-page=tax_analyst]').click();
+  await page.locator('#analyst-document-type').selectOption('W-2');
+  await page.locator('#analyst-custom-type').fill('Custom tax collection');
+  await page.locator('#analyst-file').setInputFiles([
+   {name:'Synthetic-W2.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 synthetic W2')},
+   {name:'Synthetic-1098.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 synthetic 1098')}
+  ]);
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Batch finished: 2 uploaded'));
+  await page.locator('#analyst-groups').getByRole('heading',{name:'Custom tax collection',exact:true}).waitFor();
+  await page.locator('[data-analyst-edit]').first().click();
+  await page.locator('#analyst-add-tax-field').click();
+  await page.locator('[data-tax-field] input[name=form]').fill('W-2');
+  await page.locator('[data-tax-field] input[name=box]').fill('1');
+  await page.locator('[data-tax-field] input[name=value]').fill('50000');
+  await page.locator('[data-tax-field] input[name=approved]').check();
+  await page.locator('#analyst-save').click();
+  await page.waitForFunction(()=>document.querySelector('#status').textContent==='Analyst records saved');
+  assert.equal(await page.locator('[data-tax-field] input[name=value]').inputValue(),'50000');
   await page.locator('#nav [data-page=customers]').click();
   await page.locator('#new').click();
   await page.locator('#record input[name=name]').fill('Browser customer');

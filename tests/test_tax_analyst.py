@@ -58,6 +58,32 @@ class TaxAnalystTests(unittest.TestCase):
   with patch.dict(os.environ,{'DOBHRAP_ENABLE_TAX_ANALYST':'1','OPENAI_API_KEY':'test-key','TAX_ANALYST_MODEL':'test-model'}),patch.object(a,'request_json',side_effect=RuntimeError('private upstream')) as request:
    r=self.call('analyze',{'id':d['id'],'revision':d['revision'],'consent':True});self.assertEqual(r['state'],'failed');self.assertEqual(r['records'],[]);self.assertNotIn('private upstream',r['notice']);self.assertEqual(request.call_count,1)
    with self.assertRaises(a.ServiceError):self.call('analyze',{'id':d['id'],'revision':r['revision'],'consent':True})
+ def test_tax_form_extraction_fields_unapproved(self):
+  d=self.upload();field={'form':'W-2','box':'1','label':'Wages','value':'50000.00','currency':'USD','year':2026,'approved':True,'evidence':'Page 1 box 1'}
+  output={'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps({'records':[],'tax_fields':[field]})}]}]}
+  with patch.dict(os.environ,{'DOBHRAP_ENABLE_TAX_ANALYST':'1','OPENAI_API_KEY':'test-key','TAX_ANALYST_MODEL':'test-model'}),patch.object(a,'request_json',return_value=output):
+   r=self.call('analyze',{'id':d['id'],'revision':d['revision'],'consent':True});self.assertFalse(r['tax_fields'][0]['approved']);self.assertEqual(r['tax_fields'][0]['value'],'50000.00')
+  with self.assertRaises(a.ServiceError):self.build()
+ def test_verified_tax_boxes_map_and_other_fields_preserved(self):
+  d=self.upload();fields=[{'form':'W-2','box':box,'label':'Fixture box','value':value,'currency':'USD','year':2026,'approved':True,'evidence':'Page 1'} for box,value in [('1','50000'),('2','6000')]]
+  fields.append({'form':'1098-T','box':'1','label':'Education payment','value':'1000','currency':'USD','year':2026,'approved':True})
+  self.call('save',{'id':d['id'],'revision':d['revision'],'records':[],'tax_fields':fields});b=self.build();self.assertEqual(len(b['tax_fields']),3)
+  with app.connect() as c:
+   _,p=prep.read(c,b['draft_id'],self.user);self.assertEqual(len(p['data']['income']),1);self.assertEqual(p['data']['income'][0]['amount'],'50000.00');self.assertEqual(p['data']['income'][0]['withholding'],'6000.00')
+  self.assertTrue(self.build()['reused'])
+ def test_identifier_fields_are_rejected(self):
+  with self.assertRaises(a.ServiceError):t.clean_tax_fields([{'label':'Taxpayer SSN','value':'111-22-3333','year':2026}])
+ def test_wrong_year_and_duplicate_box_rejected(self):
+  d=self.upload();field={'form':'W-2','box':'1','value':'1000','currency':'USD','year':2025,'approved':True}
+  d=self.call('save',{'id':d['id'],'revision':d['revision'],'records':[],'tax_fields':[field]})
+  with self.assertRaises(a.ServiceError):self.build()
+  field['year']=2026;self.call('save',{'id':d['id'],'revision':d['revision'],'records':[],'tax_fields':[field,field]})
+  with self.assertRaises(a.ServiceError):self.build()
+ def test_custom_document_type_and_separate_group_totals(self):
+  d=self.call('upload',{'year':2026,'type':'application/pdf','document_type':'Business mileage log','name':'Custom.pdf','base64':base64.b64encode(b'%PDF-1.4 custom').decode()})
+  self.assertEqual(d['document_type'],'Business mileage log')
+  self.save(d,[self.row(amount='0.10'),self.row(amount='0.20',approved=False)])
+  groups=self.call('list')['groups'];self.assertEqual(len(groups),1);self.assertEqual(groups[0]['transaction_totals']['USD / income / approved'],10);self.assertEqual(groups[0]['transaction_totals']['USD / income / unreviewed'],20)
  def test_existing_tenant_migration(self):
   with app.connect() as c:tenant=app.register_workspace(c,{'company':'Fixture tenant','email':'tenant@example.com','password':'test-password-123456','confirm_password':'test-password-123456'})['tenant_id']
   with app.tenant_connect(tenant) as c:c.execute('DROP TABLE tax_analyst_documents')

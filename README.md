@@ -301,3 +301,13 @@ The public `/tax-services` link registers a personal tax-only account without a 
 
 
 Super admin **Coupon management** issues full-service vouchers with expiry, usage caps, service/email restrictions and redemption auditing. Users choose **Pay with coupon** in the marketplace. Valid vouchers activate the service atomically without a gateway charge and can satisfy the tax-only year-specific payment requirement. Partial discounts and cash-value balances are not implemented.
+
+
+### Upload a complete tax document collection
+Tax analyst accepts multiple PDF, PNG and JPEG uploads, up to 2 MB each and 100 files / 100 MB per owner. Choose Auto or identify W-2, 1099-INT/DIV/NEC/MISC/K/R/B, SSA-1099, 1098/T/E, 1095-A, K-1, prior-year returns, estimated payments, charity evidence, business records or Other tax document. This list describes intake categories, not complete tax calculation support. Export Word/Excel or other files to PDF before upload. Use separate files for separate tax forms and redact unnecessary identifiers.
+
+Select full-document AI consent and Analyze automatically after upload, or use Analyze pending documents after saving the collection. The existing one-hundred-analysis-per-user daily limit applies; uploaded files remain saved when analysis is disabled, fails or reaches the limit. Review batch results and retry pending documents explicitly after resolving the issue. No automatic paid retries occur.
+
+AI separates transaction entries from tax-form box fields. Edit form name, box, label, value, currency, tax year and source reference, then approve verified fields. Unknown years must be confirmed, and fields from a prior-year return must not be approved as current-year amounts. AI does not extract personal identifiers into structured tax fields. Review originals for missing or incorrect amounts.
+
+Compilation automatically maps approved USD W-2 boxes 1/2, 1099-INT boxes 1/4 and 1099-DIV boxes 1a/1b/4 into the supported income interview. These box mappings use the IRS forms at https://www.irs.gov/pub/irs-pdf/fw2.pdf, https://www.irs.gov/pub/irs-pdf/f1099int.pdf and https://www.irs.gov/pub/irs-pdf/f1099div.pdf. Other approved fields are preserved in the compilation JSON for manual preparation; they do not automatically compute credits, itemized deductions, retirement taxability, capital gains, business tax or state returns. Avoid approving both bank deposits and tax-form amounts for the same income.
