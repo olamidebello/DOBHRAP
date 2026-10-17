@@ -13,6 +13,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, build_opener
 from urllib.error import HTTPError, URLError
 import advanced as a
+from babel.numbers import list_currencies
 
 
 def initialize(c):
@@ -224,7 +225,7 @@ def dispatch(path,method,body,c,user,tenant_id):
         name=str(body.get('name','')).strip();description=str(body.get('description','')).strip();code=str(body.get('service_code',''))
         amount=body.get('amount');currency=str(body.get('currency','')).upper()
         if not name or len(name)>120 or len(description)>2000 or not re.fullmatch('[a-z][a-z0-9_]{1,59}',code):raise a.ServiceError('Enter an offer name, description and valid service code')
-        if type(amount) is not int or not 50<=amount<=100_000_000 or currency not in ('USD','NGN'):raise a.ServiceError('Price must be 50–100000000 minor units in USD or NGN')
+        if type(amount) is not int or not 50<=amount<=100_000_000 or currency not in list_currencies() or currency in ('XTS','XXX'):raise a.ServiceError('Price must be 50–100000000 minor units in a recognized currency')
         if not isinstance(body.get('active'),bool):raise a.ServiceError('Choose whether the offer is active')
         pid=body.get('id') or str(uuid.uuid4())
         c.execute('INSERT INTO market_products VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,service_code=excluded.service_code,amount=excluded.amount,currency=excluded.currency,active=excluded.active',

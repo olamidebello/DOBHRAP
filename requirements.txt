@@ -1,1 +1,4 @@
 cryptography==46.0.7
+
+
+Babel==2.17.0

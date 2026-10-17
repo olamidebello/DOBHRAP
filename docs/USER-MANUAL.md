@@ -1,5 +1,9 @@
 # OOB Business Suite User Manual
 
+## Language, currency and time zone preferences
+
+Open Language & currency to select a CLDR locale, currency code and time zone. Core navigation has translations in English, Spanish, French, Arabic, Portuguese, German, Chinese, Hindi, Yoruba, Hausa, Igbo and Swahili. Other strings and locales use English fallback. Super administrators can publish plain-text translation entries. Locale formatting uses the currency’s decimal precision. The current ledger remains USD; choosing another display currency does not convert stored books. Dated reference rates can show labelled display estimates. Missing or stale rates leave USD amounts unchanged. Payment gateways still restrict supported settlement currencies.
+
 ## Setup, registration and sign-in
 
 The operator deploys repair-oob.yml. Open /setup and use the private server setup token to create the first super administrator. Setup closes after creation. Register a new business at /register; registration creates a separate workspace and its administrator. Sign in with your email and password. Use Sign out on shared devices.
