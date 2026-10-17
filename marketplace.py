@@ -216,6 +216,9 @@ def dispatch(path,method,body,c,user,tenant_id):
             for gateway in state['gateways']:
                 gateway['last_signed_event']=c.execute('SELECT max(created) FROM market_events WHERE gateway=?',(gateway['id'],)).fetchone()[0]
         return state
+    if route=='seed-products' and method=='POST':
+        if not admin:raise a.ServiceError('Super administrator required',403)
+        return seed_tax_products(c,body.get('preparation_price','49.00'),body.get('amendment_price','79.00'),body.get('publish',True),body.get('overwrite',False))
     if route=='products':
         if method=='GET':return [dict(r) for r in c.execute('SELECT * FROM market_products'+('' if admin else ' WHERE active=1')+' ORDER BY name')]
         if not admin:raise a.ServiceError('Super administrator required',403)
@@ -273,3 +276,23 @@ if __name__=='__main__':
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:raise SystemExit(0)
         app.init();run_all()
+
+def seed_tax_products(c,preparation_price='49.00',amendment_price='79.00',publish=True,overwrite=False):
+    """Editable starter prices for preparation access; never an IRS filing promise."""
+    import tax_preparation
+    if type(publish) is not bool or type(overwrite) is not bool:raise a.ServiceError('Choose publish and overwrite flags')
+    prices={'preparation':a.cents(preparation_price),'amendment':a.cents(amendment_price)}
+    if any(not 50<=v<=100_000_000 for v in prices.values()):raise a.ServiceError('Starter prices must be $0.50–$1000000.00')
+    created=updated=preserved=0
+    for year in tax_preparation.year_catalog()['years']:
+        for kind in ('preparation','amendment'):
+            pid='oob-tax-'+kind+'-'+str(year);code='tax_'+kind+'_'+str(year)
+            existing=c.execute('SELECT id FROM market_products WHERE id=?',(pid,)).fetchone()
+            if existing and not overwrite:preserved+=1;continue
+            name=str(year)+' '+('Tax preparation access' if kind=='preparation' else 'Amendment preparation access')
+            description='Starter preparation service for this account and tax year. Includes a private '+('guided preparation draft and reviewed-record compilation' if kind=='preparation' else 'amendment workspace and original/change/corrected comparisons')+'. Calculations are limited to implemented rules. No IRS filing, maximum refund guarantee or professional tax advice is included. Review scope before purchase.'
+            c.execute('INSERT INTO market_products VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,service_code=excluded.service_code,amount=excluded.amount,currency=excluded.currency,active=excluded.active',(pid,name,description,code,prices[kind],'USD',int(publish)))
+            if existing:updated+=1
+            else:created+=1
+    a.audit(c,0,'Tax starter offers seeded: created '+str(created)+', updated '+str(updated)+', preserved '+str(preserved))
+    return {'created':created,'updated':updated,'preserved':preserved,'currency':'USD','notice':'Editable operator starter prices, not market-price recommendations or filing fees. Existing prices are preserved unless overwrite is explicitly selected.'}

@@ -41,7 +41,7 @@ class TaxAnalystTests(unittest.TestCase):
   d=self.save(d,[self.row(kind='transfer',category='transfer'),self.row(approved=False)])
   with self.assertRaises(a.ServiceError):self.build()
  def test_other_year_worksheet_and_delete(self):
-  d=self.upload(2025);self.save(d,[self.row(date='2025-03-01')]);b=self.build(2025);self.assertIsNone(b['draft_id'])
+  d=self.upload(2025);self.save(d,[self.row(date='2025-03-01')]);b=self.build(2025);self.assertIsNotNone(b['draft_id'])
   self.call('delete-build',{'id':b['id'],'confirm':'DELETE'});self.assertFalse(self.call('list')['builds'])
   self.call('delete',{'id':d['id'],'confirm':'DELETE'});self.assertFalse(self.call('list')['documents'])
  def test_ai_consent_validation_and_request_shape(self):

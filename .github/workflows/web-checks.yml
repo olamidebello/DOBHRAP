@@ -25,6 +25,11 @@ jobs:
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/marketplace-oob.yml
       - name: Check GUI provisioning Ansible syntax
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/provision-gui-oob.yml
+      - name: Check multi-year, pricing and production playbooks
+        run: |
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-years-oob.yml
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/products-pricing-oob.yml
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/production-marketplace-oob.yml
       - name: Run API and isolation tests
         run: python -m unittest discover -s tests -v
       - name: Install browser test runtime

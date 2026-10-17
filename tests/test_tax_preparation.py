@@ -54,6 +54,27 @@ class TaxPreparationTests(unittest.TestCase):
   draft=self.create();saved=self.save(draft,data,completed=completed);computed=self.call('refund-review',{'id':draft['id'],'revision':saved['revision'],**confirm});self.assertIsNotNone(computed['refund_review']['projection'])
   changed=computed['data'];changed['income'][0]['withholding']='5000';edited=self.save(computed,changed);self.assertEqual(edited['refund_review'],{})
   self.assertIsNone(t.refund_review(data,completed,{})['projection']);data['states']=[{'state':'TX'}];self.assertIsNone(t.refund_review(data,completed,confirm)['projection'])
+ def test_six_year_catalog_and_annual_rules(self):
+  import tax_rules
+  years=t.year_catalog()['years'];self.assertEqual(len(years),6);self.assertEqual(years[0]-years[-1],5)
+  for y,rule in tax_rules.RULES.items():
+   estimate=tax_rules.estimate(y,str(rule['standard']+rule['brackets'][0]));self.assertEqual(estimate['ordinary_income_tax_cents'],rule['brackets'][0]*10)
+   if y in years:
+    d=self.call('create',{'year':y});self.assertEqual(d['year'],y);self.assertEqual(self.call('export',{'id':d['id']})['tax_year'],y)
+  self.assertEqual(tax_rules.estimate(2025,'15750')['ordinary_income_tax_cents'],0)
+ def test_amendment_owner_comparison_and_revisions(self):
+  d=self.call('amendment-create',{'year':2025});self.assertFalse(d['filing_ready'])
+  saved=self.call('amendment-save',{'id':d['id'],'revision':d['revision'],'original':{'agi':'50000','total_tax':'6000'},'corrected':{'agi':'49000','total_tax':'5800'},'reason':'Correct omitted verified expense','original_verified':True})
+  self.assertEqual(next(x for x in saved['comparison'] if x['field']=='total_tax')['change_cents'],-20000)
+  with self.assertRaises(a.ServiceError):self.call('amendment-save',{'id':d['id'],'revision':d['revision'],'original':{},'corrected':{}})
+  self.assertEqual(self.call('amendments',user={'id':2,'role':'admin'}),[])
+ def test_automatic_ai_consent_queue_and_no_amount_changes(self):
+  d=self.create();saved=self.save(d,d['data'],auto_ai_consent=True)
+  self.assertEqual(saved['ai_suggestion_status'],'queued')
+  with patch.dict(os.environ,{'DOBHRAP_ENABLE_TAX_AI':'1','OPENAI_API_KEY':'test-key','TAX_AI_MODEL':'test-model'}),patch.object(t,'tax_ai',return_value=[{'topic':'Documents','question':'Did you check eligible deductions?'}]):
+   with app.connect() as c:t.process_suggestions(c,{1:self.user})
+  updated=self.call('open',{'id':d['id']});self.assertEqual(updated['data'],saved['data']);self.assertEqual(updated['ai_review']['state'],'completed')
+  stopped=self.save(updated,updated['data'],auto_ai_consent=False);self.assertFalse(stopped['auto_ai_consent'])
  def test_documents_encrypt_download_delete_and_fake_type(self):
   d=self.create();raw=b'%PDF-1.4 fixture'
   doc=self.call('document',{'id':d['id'],'name':'fixture.pdf','type':'application/pdf','base64':base64.b64encode(raw).decode()})

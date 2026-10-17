@@ -31,6 +31,15 @@ class MarketplaceTests(unittest.TestCase):
         return self.call('checkout',{'product_id':self.product,'gateway':gateway,'request_key':request_key or str(uuid.uuid4()),'amount':1})
     def paid(self,oid,**overrides):
         return {'id':'cs_test_fixture','payment_status':'paid','amount_total':2500,'currency':'usd','client_reference_id':oid,'metadata':{'order_id':oid},'livemode':False,**overrides}
+    def test_seed_tax_offers_preserves_operator_prices(self):
+        result=self.call('seed-products',{'preparation_price':'49.00','amendment_price':'79.00','publish':True,'overwrite':False},self.admin)
+        self.assertEqual(result['created'],12)
+        products=self.call('products',user=self.admin);offer=next(p for p in products if p['service_code']=='tax_preparation_2026');self.assertEqual(offer['amount'],4900)
+        self.call('products',{**offer,'amount':6500,'active':True},self.admin)
+        result=self.call('seed-products',{},self.admin);self.assertEqual(result['preserved'],12)
+        self.assertEqual(next(p for p in self.call('products',user=self.admin) if p['id']==offer['id'])['amount'],6500)
+        with self.assertRaises(a.ServiceError):self.call('seed-products',{},self.buyer)
+
     def test_checkout_server_price_nonce_and_no_redirect_fulfillment(self):
         request_key=str(uuid.uuid4())
         with patch.object(m,'provider',return_value={'id':'cs_test_fixture','url':'https://checkout.stripe.com/c/test'}) as provider:

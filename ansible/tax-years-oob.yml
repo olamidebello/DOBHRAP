@@ -1,0 +1,54 @@
+---
+- import_playbook: provision-gui-oob.yml
+
+- name: Verify six-year tax preparation, amendments and filing readiness
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify installed year catalog
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/api/tax-years
+        return_content: true
+        status_code: 200
+      register: tax_year_catalog
+    - name: Validate current year and five prior years
+      ansible.builtin.assert:
+        that:
+          - tax_year_catalog.json.years | length == 6
+          - tax_year_catalog.json.years[0] == tax_year_catalog.json.current_year
+          - tax_year_catalog.json.years[5] == tax_year_catalog.json.current_year - 5
+          - tax_year_catalog.json.capabilities | length == 6
+    - name: Verify tax analyst and amendment frontend
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/tax-analyst.js
+        return_content: true
+      register: tax_year_gui
+    - name: Verify wired preparation controls
+      ansible.builtin.assert:
+        that:
+          - "'analyst-prepare-years' in tax_year_gui.content"
+          - "'showTaxAmendments' in tax_year_gui.content"
+          - "'amendment-import-original' in tax_year_gui.content"
+    - name: Save public readiness report without private tax records
+      ansible.builtin.copy:
+        dest: /var/log/oob-tax-years-readiness.json
+        content: '{{ tax_year_catalog.json | to_nice_json }}'
+        owner: root
+        group: root
+        mode: '0600'
+    - name: Require complete filing capability only when explicitly requested
+      ansible.builtin.assert:
+        that:
+          - tax_year_catalog.json.filing_available | bool
+        fail_msg: 'Automatic filing is unavailable: complete year-specific return calculations, validated signed packages, taxpayer authorization and an authorized provider with a supported filing year/method are required. No records were transmitted.'
+      when: tax_require_filing | default(false) | bool
+    - name: Report installed features and remaining filing requirements
+      ansible.builtin.debug:
+        msg:
+          - 'Tax years installed: {{ tax_year_catalog.json.years }}'
+          - 'Tax analyst -> select year -> upload/type documents -> AI extraction with consent -> review and approve -> prepare selected/all eligible years.'
+          - 'Amended tax preparation -> import reviewed original summary -> compare corrected preparation -> export amendment worksheet.'
+          - 'Tax-only accounts need payment or a valid coupon for each year before preparation.'
+          - 'This playbook deploys code, GUI, APIs, migrations and readiness checks. It does not invent tax records, signatures or official filing packages.'
+          - 'Individual electronic filing does not cover every prior year; the provider must verify the filing window and paper/electronic method.'

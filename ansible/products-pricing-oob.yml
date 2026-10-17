@@ -1,0 +1,26 @@
+---
+- import_playbook: tax-years-oob.yml
+
+- name: Generate editable six-year service offers and verify purchasing
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Seed preparation and amendment products without overwriting existing prices
+      ansible.builtin.script:
+        cmd: >-
+          seed-products.py --preparation-price {{ tax_preparation_price_usd | default('49.00') | quote }}
+          --amendment-price {{ tax_amendment_price_usd | default('79.00') | quote }}
+          {{ '--publish' if tax_publish_products | default(true) | bool else '' }}
+          {{ '--overwrite' if tax_overwrite_product_prices | default(false) | bool else '' }}
+        executable: /opt/dobhrap/current/venv/bin/python
+      register: seeded_tax_products
+      changed_when: (seeded_tax_products.stdout | from_json).created | int > 0 or (seeded_tax_products.stdout | from_json).updated | int > 0
+    - name: Report product and payment management
+      ansible.builtin.debug:
+        msg:
+          - '{{ seeded_tax_products.stdout | from_json }}'
+          - 'Super admin -> Marketplace administration -> edit price, currency, description, publication and fulfillment.'
+          - 'Super admin -> Coupon management -> issue full-service vouchers with limits and restrictions.'
+          - 'Provider provisioning & keys -> configure merchant credentials and live gateway controls. Checkout requires a working gateway; coupons work independently.'
+          - 'These are editable operator starter prices for preparation access, not a promise of tax filing or maximum refund.'

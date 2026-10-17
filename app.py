@@ -167,6 +167,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
+   if self.command=='GET' and path=='/api/tax-years':self.reply(200,tax_preparation.year_catalog());return
    if self.command=='GET' and path=='/api/mobile':self.reply(200,mobile_download());return
    if self.command=='GET' and path=='/api/identity': self.reply(200,{'application':'oob-business-suite','version':2}); return
    if path=='/health': self.reply(200,{'status':'ok'}); return
@@ -256,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
     if coupon_result is not None:c.commit();self.reply(200,coupon_result);return
     result=marketplace.dispatch(path,self.command,body,c,u,tenant_id)
     if result is not None:
-     if tenant['service_mode']=='tax_only' and path=='/api/market/products' and self.command=='GET':result=[p for p in result if __import__('re').fullmatch(r'tax_preparation_\d{4}',p['service_code'])]
+     if tenant['service_mode']=='tax_only' and path=='/api/market/products' and self.command=='GET':result=[p for p in result if __import__('re').fullmatch(r'tax_(preparation|amendment)_\d{4}',p['service_code'])]
      c.commit();self.reply(200,result);return
     c=stack.enter_context(tenant_connect(tenant_id))
     analyst_result=tax_analyst.dispatch(path,self.command,body,c,u)

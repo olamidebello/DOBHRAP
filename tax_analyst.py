@@ -15,8 +15,7 @@ def initialize(c):
  CREATE TABLE IF NOT EXISTS tax_analyst_builds(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,year INTEGER NOT NULL,digest TEXT NOT NULL,payload TEXT NOT NULL,created INTEGER NOT NULL,UNIQUE(owner,year,digest));''')
 
 def year(value):
- if type(value) is not int or not 2000<=value<=2100:raise a.ServiceError('Choose a tax year from 2000 to 2100')
- return value
+ return prep.validate_year(value)
 
 def read(c,did,user):
  row=c.execute('SELECT * FROM tax_analyst_documents WHERE id=? AND owner=?',(did,user['id'])).fetchone()
@@ -106,7 +105,7 @@ def dispatch(path,method,body,c,user):
  if route=='list' and method=='GET':
   docs=[public(r,a.unseal(r['payload'])) for r in c.execute('SELECT * FROM tax_analyst_documents WHERE owner=? ORDER BY created DESC',(user['id'],))]
   builds=[{'id':r['id'],'year':r['year'],'created':r['created'],**a.unseal(r['payload'])} for r in c.execute('SELECT * FROM tax_analyst_builds WHERE owner=? ORDER BY created DESC',(user['id'],))]
-  return {'documents':docs,'builds':builds,'groups':group_documents(docs),'kinds':KINDS,'categories':CATEGORIES,'document_types':DOCUMENT_TYPES,'ai_enabled':settings.get('DOBHRAP_ENABLE_TAX_ANALYST')=='1' and bool(settings.get('OPENAI_API_KEY')) and bool(settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL'))}
+  return {**prep.year_catalog(),'documents':docs,'builds':builds,'groups':group_documents(docs),'kinds':KINDS,'categories':CATEGORIES,'document_types':DOCUMENT_TYPES,'ai_enabled':settings.get('DOBHRAP_ENABLE_TAX_ANALYST')=='1' and bool(settings.get('OPENAI_API_KEY')) and bool(settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL'))}
  if method!='POST':raise a.ServiceError('Analyst route not found',404)
  if route=='upload':
   c.execute('BEGIN IMMEDIATE')
@@ -127,6 +126,15 @@ def dispatch(path,method,body,c,user):
   c.execute('INSERT INTO tax_analyst_documents(id,owner,year,payload,size,created) VALUES(?,?,?,?,?,?)',(did,user['id'],y,a.seal(p),len(raw),int(time.time())))
   a.audit(c,user['id'],'Private tax analyst document uploaded '+did);r,p=read(c,did,user);return public(r,p)
  if route=='compile':return compile_year(c,body,user)
+ if route=='prepare-years':
+  years=body.get('years')
+  if body.get('confirm') is not True or not isinstance(years,list) or not 1<=len(years)<=6 or len(set(years))!=len(years):raise a.ServiceError('Confirm one to six distinct selected tax years')
+  for y in years:year(y)
+  results=[]
+  for y in years:
+   try:result=compile_year(c,{'year':y,'confirm':True},user);c.commit();results.append({'year':y,'state':'prepared','build_id':result['id'],'draft_id':result['draft_id']})
+   except a.ServiceError as error:c.rollback();results.append({'year':y,'state':'blocked','reason':str(error)})
+  return {'results':results,'filing_available':False}
  if route=='delete-build':
   if body.get('confirm')!='DELETE':raise a.ServiceError('Confirm DELETE')
   c.execute('DELETE FROM tax_analyst_builds WHERE id=? AND owner=?',(body.get('id'),user['id']));return {'ok':True}
@@ -227,13 +235,13 @@ def compile_year(c,body,user):
   totals['reported_income_cents']+=a.cents(amount)
  if len(income)>100:raise a.ServiceError('More than 100 income rows; consolidate verified income in the analyst before compiling')
  bid=str(uuid.uuid4());now=int(time.time());draft_id=None
- if y==2026:
+ if y in prep.year_catalog()['years']:
   if c.execute('SELECT count(*) FROM tax_drafts WHERE owner=?',(user['id'],)).fetchone()[0]>=20:raise a.ServiceError('Private preparation draft limit reached; remove unused drafts')
-  draft_id=str(uuid.uuid4());data={'start':{'name':'2026 analyst compilation '+bid[:8],'return_type':'personal','assistance':'self_guided'},'income':income}
+  draft_id=str(uuid.uuid4());data={'start':{'name':str(y)+' analyst compilation '+bid[:8],'return_type':'personal','assistance':'self_guided'},'income':income}
   if totals['business_receipts_cents'] or totals['business_expense_intake_cents']:
    data['businesses']=[{'_row_id':str(uuid.uuid4()),'name':'Analyst business intake — reconcile by business','receipts':str(Decimal(totals['business_receipts_cents'])/100),'expenses':str(Decimal(totals['business_expense_intake_cents'])/100),'owners':'User-approved bank/receipt intake, not verified deduction eligibility. Reconcile documents, allocate separate businesses, inventory, assets and personal use.'}]
-  data=prep.clean(data,{})
+  data=prep.clean(data,{},y)
   c.execute('INSERT INTO tax_drafts(id,owner,year,payload,created,updated) VALUES(?,?,?,?,?,?)',(draft_id,user['id'],y,a.seal({'data':data,'completed':[],'analyst_build':bid}),now,now))
- result={'year':y,'draft_id':draft_id,'records':records,'tax_fields':fields,'totals':totals,'unapproved_excluded':pending,'notice':'Yearly preparation compilation — NOT FOR FILING. No complete refund/tax computation or IRS return. Withholding is not inferred from bank deposits. Reconcile gross income and tax forms. Only W-2 boxes 1/2, 1099-INT boxes 1/4 and 1099-DIV boxes 1a/1b/4 map automatically; all other approved fields remain in this compilation for manual preparation. The guided return interview currently supports 2026 only; other years export a worksheet.'}
+ result={'year':y,'draft_id':draft_id,'records':records,'tax_fields':fields,'totals':totals,'unapproved_excluded':pending,'notice':'Yearly preparation compilation — NOT FOR FILING. No complete refund/tax computation or IRS return. Withholding is not inferred from bank deposits. Reconcile gross income and tax forms. Only W-2 boxes 1/2, 1099-INT boxes 1/4 and 1099-DIV boxes 1a/1b/4 map automatically; all other approved fields remain in this compilation for manual preparation. Six-year guided intake is available. Year-specific calculation rules are limited; no official filing package is generated.'}
  if c.execute('SELECT count(*) FROM tax_analyst_builds WHERE owner=?',(user['id'],)).fetchone()[0]>=40:raise a.ServiceError('Compilation limit reached')
  c.execute('INSERT INTO tax_analyst_builds VALUES(?,?,?,?,?,?)',(bid,user['id'],y,digest,a.seal(result),now));a.audit(c,user['id'],'Private tax analyst compilation '+bid);return {'id':bid,**result,'reused':False}

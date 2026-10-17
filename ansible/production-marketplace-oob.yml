@@ -1,0 +1,23 @@
+---
+- import_playbook: products-pricing-oob.yml
+
+- name: Verify production merchant readiness without charging a customer
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run private merchant account and published product checks
+      ansible.builtin.script:
+        cmd: marketplace-production-check.py
+        executable: /opt/dobhrap/current/venv/bin/python
+      register: production_marketplace_check
+      changed_when: false
+    - name: Report production readiness without credentials
+      ansible.builtin.debug:
+        msg: '{{ production_marketplace_check.stdout | from_json }}'
+    - name: Require production checkout readiness
+      ansible.builtin.assert:
+        that:
+          - (production_marketplace_check.stdout | from_json).ready_for_live_checkout | bool
+        fail_msg: 'Products, prices and GUI are deployed, but live checkout is not ready. In Provider provisioning & keys configure live merchant credentials, enable live marketplace/payments and provision webhook signing, then rerun. Coupons remain available. No customer was charged.'
+      when: marketplace_require_live_checkout | default(true) | bool
