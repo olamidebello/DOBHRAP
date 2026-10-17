@@ -4,7 +4,9 @@
   become: true
   vars:
     app_root: /opt/dobhrap
-    domain: dobhrap.com
+    domain: olamideolatayobello.com
+    app_port: 18081
+    replace_domain_config: false
     admin_email: admin@example.com
     app_source: "{{ playbook_dir }}/.."
     plaid_env: sandbox
@@ -28,7 +30,7 @@
       no_log: true
     - name: Hash branding asset on controller
       ansible.builtin.stat:
-        path: "{{ app_source }}/assets/dobhrap-logo.jpg"
+        path: "{{ app_source }}/assets/oob-logo.png"
         checksum_algorithm: sha256
       delegate_to: localhost
       become: false
@@ -70,7 +72,7 @@
         owner: root
         group: dobhrap
         mode: '0640'
-      loop: [assets/dobhrap-logo.jpg, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py]
+      loop: [assets/oob-logo.png, app.py, advanced.py, worker.py, backup.py, index.html, advanced.js, requirements.txt, tests/test_app.py, tests/test_advanced.py]
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
@@ -100,6 +102,7 @@
         owner: root
         mode: '0600'
         content: |
+          PORT={{ app_port }}
           DOBHRAP_DB=/var/lib/dobhrap/dobhrap.db
           DOBHRAP_ADMIN_EMAIL={{ admin_email | to_json }}
           DOBHRAP_ADMIN_PASSWORD={{ admin_password | to_json }}
@@ -187,10 +190,11 @@
         mode: '0644'
         content: |
           limit_req_zone $binary_remote_addr zone=dobhrap_login:10m rate=5r/m;
-    - name: Install domain configuration on first deployment
+    - name: Install domain configuration
       ansible.builtin.copy:
         dest: "/etc/nginx/sites-available/{{ domain }}"
-        force: false
+        force: "{{ replace_domain_config | bool }}"
+        backup: true
         mode: '0644'
         content: |
           server {
@@ -199,11 +203,11 @@
             client_max_body_size 100k;
             location = /api/login {
               limit_req zone=dobhrap_login burst=5 nodelay;
-              proxy_pass http://127.0.0.1:8080;
+              proxy_pass http://127.0.0.1:{{ app_port }};
               proxy_set_header Host $host;
             }
             location / {
-              proxy_pass http://127.0.0.1:8080;
+              proxy_pass http://127.0.0.1:{{ app_port }};
               proxy_read_timeout 180s;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-Proto $scheme;
@@ -238,7 +242,7 @@
       changed_when: "'no action taken' not in certificate.stdout"
     - name: Verify readiness
       ansible.builtin.uri:
-        url: http://127.0.0.1:8080/health
+        url: http://127.0.0.1:{{ app_port }}/health
         status_code: 200
   handlers:
     - name: Restart DOBHRAP
@@ -246,3 +250,4 @@
         name: dobhrap
         state: restarted
         daemon_reload: true
+

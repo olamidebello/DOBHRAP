@@ -1,0 +1,24 @@
+---
+- name: Collect initial administrator settings
+  hosts: dobhrap
+  gather_facts: false
+  vars_prompt:
+    - name: deployment_admin_email
+      prompt: Administrator email (also used for HTTPS certificate notices)
+      private: false
+    - name: deployment_admin_password
+      prompt: Initial administrator password (at least 14 characters; existing accounts are unchanged)
+      private: true
+      confirm: true
+  tasks:
+    - name: Set deployment settings
+      ansible.builtin.set_fact:
+        admin_email: "{{ deployment_admin_email }}"
+        admin_password: "{{ deployment_admin_password }}"
+      no_log: true
+
+- import_playbook: deploy.yml
+  vars:
+    domain: olamideolatayobello.com
+    app_port: 18081
+    replace_domain_config: true

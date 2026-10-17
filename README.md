@@ -110,3 +110,16 @@ For a manual database recovery, stop the web service and both timers, retain a c
 - https://www.irs.gov/pub/irs-drop/rp-25-32.pdf
 - https://www.irs.gov/publications/p505
 - https://www.irs.gov/e-file-providers/modernized-e-file-mef-for-employment-taxes-frequently-asked-questions
+
+
+## Olamide Olatayo Bello deployment
+
+The supplied OOB logo is served on the sign-in page and workspace. The deployment defaults to `olamideolatayobello.com` on private port 18081.
+
+On the Debian hosting server, run from this repository (install Ansible first if needed):
+
+```bash
+ansible-playbook -i 'dobhrap,' -c local ansible/deploy-oob.yml
+```
+
+The playbook prompts privately for the initial administrator password and backs up and replaces this domain's nginx configuration, then configures HTTPS. Existing DOBHRAP accounts are unchanged. DNS must point at this server. Supply your existing encrypted integration settings with `--ask-vault-pass -e @/path/to/encrypted-secrets.yml` to retain configured provider settings; without them deployment uses disabled sandbox defaults. This targets the apex domain only. Review any other enabled nginx files declaring the same domain before running.
