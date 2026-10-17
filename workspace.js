@@ -8,20 +8,21 @@ const navGroups=[
  ['Sales & customers',['customers','products','invoices','projects']],
  ['Purchases & accounting',['vendors','bills','expenses','journals','reports','financial_statements']],
  ['People & payroll',['employees','time','leave','recruiting','benefits','performance','payroll','payroll_processing']],
+ ['Tax',['tax_preparation']],
  ['Banking & tax',['bank_review','bank_connections','tax_returns','tax_documents','tax_income','tax_deductions','tax_calculator','tax_organizer','efile']],
  ['Automation',['tasks','recurring','approvals','jobs']],
  ['Administration',['users','integrations','locale_settings','user_manual','support_center','downloads','help']]
 ];
-const navLabels={locale_settings:'Language & currency',provider_keys:'Provider provisioning & keys',user_manual:'User manual',support_center:'Support center & tickets',marketplace:'Service marketplace',market_orders:'Marketplace orders',market_services:'Purchased services',market_admin:'Marketplace administration',dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
+const navLabels={tax_preparation:'Tax preparation',tax_return_2026:'2026 Tax Return',locale_settings:'Language & currency',provider_keys:'Provider provisioning & keys',user_manual:'User manual',support_center:'Support center & tickets',marketplace:'Service marketplace',market_orders:'Marketplace orders',market_services:'Purchased services',market_admin:'Marketplace administration',dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
 function pageLabel(page){return t(navLabels[page]||title(page))}
 function isAdmin(){return ['admin','super_admin'].includes(userRole)}
 function availablePage(page){
  if(['super_admin','tenants','deployment','market_admin','provider_keys'].includes(page))return userRole==='super_admin';
  if(['users','integrations','bank_connections','tax_calculator','payroll_processing','efile','approvals','jobs','recurring'].includes(page))return isAdmin();
- if(page==='payroll'&&userRole==='viewer')return false;return !!modules[page]||['locale_settings','user_manual','support_center','marketplace','market_orders','market_services','dashboard','journals','reports','financial_statements','tax_organizer','capabilities','downloads','payroll','help'].includes(page);
+ if(page==='payroll'&&userRole==='viewer')return false;return !!modules[page]||['tax_preparation','tax_return_2026','locale_settings','user_manual','support_center','marketplace','market_orders','market_services','dashboard','journals','reports','financial_statements','tax_organizer','capabilities','downloads','payroll','help'].includes(page);
 }
 function shortcuts(){try{return JSON.parse(localStorage.getItem(`oob-shortcuts-${currentUserId}-${currentTenantId}`)||'[]').filter(availablePage)}catch{return []}}
-function navigationButton(page){return `<button type="button" data-page="${page}" title="${esc(pageLabel(page))}">${esc(pageLabel(page))}</button>`}
+function navigationButton(page){if(page==='tax_preparation')return `<details open class="tax-prep-menu"><summary>${esc(pageLabel(page))}</summary><button type="button" data-page="tax_preparation">${esc(pageLabel(page))}</button><button type="button" data-page="tax_return_2026">${esc(pageLabel('tax_return_2026'))}</button></details>`;return `<button type="button" data-page="${page}" title="${esc(pageLabel(page))}">${esc(pageLabel(page))}</button>`}
 function buildNavigation(me){
  currentUserId=me.id;currentTenantId=me.tenant.id;
  const saved=shortcuts();

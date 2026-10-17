@@ -288,3 +288,7 @@ The ledger, existing operational totals and US tax/payroll calculations remain U
 Marketplace offers may record recognized currencies and format their integer minor-unit prices accordingly. Checkout remains limited to the implemented Stripe/USD and Paystack/NGN combinations; unsupported settlement currencies show payment unavailable. No customer payment is converted automatically. Currency formatting and locale selection do not establish a provider's currency, jurisdiction or language availability.
 
 Deploy using the existing `ansible/provision-gui-oob.yml` playbook; it installs the pinned Babel dependency and the internationalization API/frontend assets. No additional provider key is required for locale catalogs or formatting.
+
+
+### Private 2026 tax preparation
+Tax → Tax preparation → 2026 Tax Return provides a saved, encrypted slide interview, supporting document storage, CSV income intake, approved workspace-record imports, review and worksheet export. Opt-in GUI-configured AI reviews a redacted summary for potential deduction/credit questions. This is preparation intake with a limited ordinary-income estimate, not a complete tax/refund engine or e-file return. See the user manual for scope and privacy details. Existing workspace databases migrate on application startup.

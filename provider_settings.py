@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 SECRET_FIELDS={'SUPPORT_WEBHOOK_TOKEN','OPENAI_API_KEY','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','PAYSTACK_SECRET_KEY','PLAID_CLIENT_ID','PLAID_SECRET','CHECK_API_KEY','EFILE_GATEWAY_TOKEN'}
 FIELDS={
  'SUPPORT_WEBHOOK_TOKEN':'secret',
- 'OPENAI_API_KEY':'secret','SUPPORT_AI_MODEL':'text','DOBHRAP_ENABLE_SUPPORT_AI':'bool','DOBHRAP_SUPPORT_AUTO_AI':'bool',
+ 'OPENAI_API_KEY':'secret','TAX_AI_MODEL':'text','DOBHRAP_ENABLE_TAX_AI':'bool','SUPPORT_AI_MODEL':'text','DOBHRAP_ENABLE_SUPPORT_AI':'bool','DOBHRAP_SUPPORT_AUTO_AI':'bool',
  'STRIPE_SECRET_KEY':'secret','STRIPE_WEBHOOK_SECRET':'secret','PAYSTACK_SECRET_KEY':'secret',
  'PAYMENTS_ENV':['test','live'],'DOBHRAP_ENABLE_MARKETPLACE':'bool','DOBHRAP_ENABLE_LIVE_PAYMENTS':'bool',
  'PLAID_CLIENT_ID':'secret','PLAID_SECRET':'secret','PLAID_ENV':['sandbox','production'],'PLAID_REDIRECT_URI':'url',
@@ -70,7 +70,7 @@ def check(provider):
  import advanced as a
  import marketplace as m
  if provider=='openai':
-  key=get('OPENAI_API_KEY','');model=get('SUPPORT_AI_MODEL','')
+  key=get('OPENAI_API_KEY','');model=get('SUPPORT_AI_MODEL','') or get('TAX_AI_MODEL','')
   if not key or not model:raise a.ServiceError('Configure an OpenAI key and model first')
   a.request_json('https://api.openai.com/v1/models/'+a.identifier(model),headers={'Authorization':'Bearer '+key},method='GET')
  elif provider=='stripe':

@@ -8,6 +8,7 @@ import marketplace
 import provider_settings
 import support
 import international
+import tax_preparation
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 MOBILE_CACHE={'expires':0,'result':None}
@@ -50,6 +51,7 @@ BUSINESS_SCHEMA=' CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,modu
 def initialize_business(c):
  c.executescript(BUSINESS_SCHEMA)
  advanced.initialize(c)
+ tax_preparation.initialize(c)
  for a in [('1000','Cash','asset'),('1100','Accounts receivable','asset'),('2000','Accounts payable','liability'),('3000','Equity','equity'),('4000','Sales','income'),('5000','Operating expense','expense'),('5100','Wages','expense')]: c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)',a)
 
 def tenant_connect(tenant_id):
@@ -90,6 +92,8 @@ def init():
   provider_settings.initialize(c)
   support.initialize(c)
   international.initialize(c)
+  for tenant in c.execute('SELECT id FROM tenants WHERE id>1').fetchall():
+   with tenant_connect(tenant['id']) as tenant_db:initialize_business(tenant_db)
   if not c.execute('SELECT 1 FROM users').fetchone():
    p=os.environ.get('DOBHRAP_ADMIN_PASSWORD',''); email=os.environ.get('DOBHRAP_ADMIN_EMAIL','admin@example.com')
    if p:
@@ -151,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -171,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
     self.reply(200,result);return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))
-    if not 0<=size<=100000: self.reply(413,{'error':'Request too large'}); return
+    if not 0<=size<=(3_000_000 if path=='/api/tax-prep/document' else 100000): self.reply(413,{'error':'Request too large'}); return
     body=json.loads(self.rfile.read(size) or b'{}')
     if not isinstance(body,dict):raise ValueError('Expected a JSON object')
    with ExitStack() as stack:
@@ -241,6 +245,8 @@ class Handler(BaseHTTPRequestHandler):
     result=marketplace.dispatch(path,self.command,body,c,u,tenant_id)
     if result is not None:c.commit();self.reply(200,result);return
     c=stack.enter_context(tenant_connect(tenant_id))
+    tax_result=tax_preparation.dispatch(path,self.command,body,c,u)
+    if tax_result is not None:c.commit();self.reply(200,tax_result);return
     if path=='/api/financial-statements' and self.command=='GET':self.reply(200,financial_statements(c));return
     if path=='/api/dashboard' and self.command=='GET':self.reply(200,dashboard(c,u['role']));return
     result=advanced.dispatch(path,self.command,body,c,u,post_journal,tenant_id=tenant_id)

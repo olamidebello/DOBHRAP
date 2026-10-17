@@ -51,3 +51,13 @@ Automation runs through fixed scheduled workers: recurring records, approved job
 ## Mobile downloads and privacy
 
 Open Mobile downloads for the installable web app or available Android preview. Provider login may require the normal browser. The service worker caches static assets only, never authenticated business APIs. Lock your device and sign out when using another person’s phone.
+
+
+## 2026 tax preparation and record-assisted entry
+Open **Tax → Tax preparation → 2026 Tax Return** to create a private, encrypted preparation worksheet. Continue through the slides or swipe horizontally; save and resume on another device. Supporting PDF/images are stored encrypted, but their contents are not automatically extracted. Income CSV imports append entries and require duplicate checks.
+
+On Review, choose **Preview workspace income and expense records**. Only workspace administrators can import business records. Select records, confirm their tax year and ownership, and approve import. Source IDs prevent repeated imports of the same business records; manually entered or CSV amounts can still overlap. Imported expenses are intake entries, not automatically deductible amounts. Review and consolidate them.
+
+Super admins can configure an OpenAI key, tax AI model and the explicit tax AI enable switch in the provider console. Each user must consent before requesting an AI opportunity review. Only categories and totals are sent; structured identifiers, names, addresses, notes and uploaded documents are excluded. Suggestions are unverified questions about possible deductions and credits, not eligibility decisions or refund computations. Requests are limited to one per draft per five minutes and twenty per user daily.
+
+The interview exports an identification-masked preparation JSON and printable worksheet, not an official return. Other personal details remain in the owner’s export. Document downloads retain original contents. A limited ordinary-income estimate is available only for supported simple cases; credits, state taxes, capital gains, self-employment and special circumstances require additional calculations and professional review. No maximum refund, complete tax liability, signature, IRS transmission or filing acceptance is provided.
