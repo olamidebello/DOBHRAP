@@ -292,3 +292,12 @@ Deploy using the existing `ansible/provision-gui-oob.yml` playbook; it installs 
 
 ### Private 2026 tax preparation
 Tax → Tax preparation → 2026 Tax Return provides a saved, encrypted slide interview, supporting document storage, CSV income intake, approved workspace-record imports, review and worksheet export. Opt-in GUI-configured AI reviews a redacted summary for potential deduction/credit questions. This is preparation intake with a limited ordinary-income estimate, not a complete tax/refund engine or e-file return. See the user manual for scope and privacy details. Existing workspace databases migrate on application startup.
+
+
+### Tax analyst and tax-only registration
+**Tax → Tax preparation → 2026 Tax Return → Tax analyst** stores private PDF/JPEG/PNG statements and receipts, extracts proposed transactions using a GUI-configured document-capable OpenAI model with explicit full-document consent, and supports manual correction, classification and approval. Compile approved USD records into yearly preparation snapshots; 2026 compilations also create a guided preparation draft. Other years export worksheets only. No complete tax calculation, refund guarantee or official filing package is generated.
+
+The public `/tax-services` link registers a personal tax-only account without a company name. Business APIs and navigation are denied. Tax-only users can upload/review documents before payment, but must purchase a **live verified** `tax_preparation_YEAR` offer before creating, compiling or exporting a preparation. A super admin publishes offers and prices in Marketplace administration and configures live gateway credentials through the provider console. Test payments do not unlock access. Preparation access does not imply IRS e-file availability.
+
+
+Super admin **Coupon management** issues full-service vouchers with expiry, usage caps, service/email restrictions and redemption auditing. Users choose **Pay with coupon** in the marketplace. Valid vouchers activate the service atomically without a gateway charge and can satisfy the tax-only year-specific payment requirement. Partial discounts and cash-value balances are not implemented.

@@ -9,6 +9,9 @@ import provider_settings
 import support
 import international
 import tax_preparation
+import tax_analyst
+import tax_services
+import coupons
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 MOBILE_CACHE={'expires':0,'result':None}
@@ -52,6 +55,7 @@ def initialize_business(c):
  c.executescript(BUSINESS_SCHEMA)
  advanced.initialize(c)
  tax_preparation.initialize(c)
+ tax_analyst.initialize(c)
  for a in [('1000','Cash','asset'),('1100','Accounts receivable','asset'),('2000','Accounts payable','liability'),('3000','Equity','equity'),('4000','Sales','income'),('5000','Operating expense','expense'),('5100','Wages','expense')]: c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)',a)
 
 def tenant_connect(tenant_id):
@@ -64,12 +68,14 @@ def tenant_connect(tenant_id):
 def register_workspace(c,body):
  c.execute('BEGIN IMMEDIATE')
  if not c.execute('SELECT 1 FROM users').fetchone(): raise advanced.ServiceError('Complete platform setup first',409)
- company=str(body.get('company','')).strip();email=str(body.get('email','')).strip().lower();p=str(body.get('password',''))
+ mode=body.get('service_mode','business')
+ if mode not in ('business','tax_only'):raise ValueError('Invalid account type')
+ company='Personal tax account' if mode=='tax_only' else str(body.get('company','')).strip();email=str(body.get('email','')).strip().lower();p=str(body.get('password',''))
  if not company or len(company)>150:raise ValueError('Business name is required (maximum 150 characters)')
  if len(email)>254 or '@' not in email or any(x.isspace() for x in email):raise ValueError('Enter a valid email')
  if not 14<=len(p)<=1024 or p!=body.get('confirm_password'):raise ValueError('Use matching passwords of 14 to 1024 characters')
  if c.execute('SELECT 1 FROM users WHERE lower(email)=?',(email,)).fetchone():raise ValueError('An account already uses that email')
- tid=c.execute('INSERT INTO tenants(name) VALUES(?)',(company,)).lastrowid
+ tid=c.execute('INSERT INTO tenants(name,service_mode) VALUES(?,?)',(company,mode)).lastrowid
  root=Path(DB).parent/'tenants';root.mkdir(mode=0o700,exist_ok=True)
  target=root/('tenant-'+str(tid)+'.db')
  with sqlite3.connect(target) as tenant:initialize_business(tenant)
@@ -83,12 +89,14 @@ def init():
  Path(DB).parent.mkdir(parents=True,exist_ok=True)
  with connect() as c:
   c.executescript("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE,salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS setup_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tenants(id INTEGER PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',created TEXT DEFAULT CURRENT_TIMESTAMP);")
+  tax_services.initialize(c)
   if 'tenant_id' not in [row[1] for row in c.execute('PRAGMA table_info(users)')]:c.execute('ALTER TABLE users ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1')
   c.execute("INSERT OR IGNORE INTO tenants(id,name) VALUES(1,'Platform workspace')")
   c.execute("CREATE TABLE IF NOT EXISTS platform_jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,creator INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'queued',created TEXT DEFAULT CURRENT_TIMESTAMP,finished TEXT,summary TEXT)")
   c.execute("CREATE TABLE IF NOT EXISTS platform_state(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
   initialize_business(c)
   marketplace.initialize(c)
+  coupons.initialize(c)
   provider_settings.initialize(c)
   support.initialize(c)
   international.initialize(c)
@@ -151,11 +159,11 @@ class Handler(BaseHTTPRequestHandler):
  def handle_request(self):
   try:
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/downloads','/downloads/'):
+   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -175,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
     self.reply(200,result);return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))
-    if not 0<=size<=(3_000_000 if path=='/api/tax-prep/document' else 100000): self.reply(413,{'error':'Request too large'}); return
+    if not 0<=size<=(3_000_000 if path in ('/api/tax-prep/document','/api/tax-analyst/upload') else 100000): self.reply(413,{'error':'Request too large'}); return
     body=json.loads(self.rfile.read(size) or b'{}')
     if not isinstance(body,dict):raise ValueError('Expected a JSON object')
    with ExitStack() as stack:
@@ -230,7 +238,9 @@ class Handler(BaseHTTPRequestHandler):
     tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tenant_id,)).fetchone()
     if not tenant:self.reply(404,{'error':'Workspace not found'});return
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
-    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return
+    tax_services.enforce(c,path,self.command,body,tenant,u)
+    if path=='/api/tax-services/status' and self.command=='GET':self.reply(200,tax_services.status(c,tenant_id,u));return
+    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':{} if tenant['service_mode']=='tax_only' else MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return
     if path=='/api/users':
      if u['role'] not in ('admin','super_admin'):self.reply(403,{'error':'Administrator required'});return
      if self.command=='GET':self.reply(200,[dict(row) for row in c.execute('SELECT id,email,role FROM users WHERE tenant_id=? ORDER BY id',(tenant_id,))]);return
@@ -242,9 +252,15 @@ class Handler(BaseHTTPRequestHandler):
      c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],'User created for workspace '+str(tenant_id)));c.commit();self.reply(201,{'ok':True});return
     support_result=support.dispatch(path,self.command,body,c,u,tenant_id)
     if support_result is not None:c.commit();self.reply(200,support_result);return
+    coupon_result=coupons.dispatch(path,self.command,body,c,u,tenant_id)
+    if coupon_result is not None:c.commit();self.reply(200,coupon_result);return
     result=marketplace.dispatch(path,self.command,body,c,u,tenant_id)
-    if result is not None:c.commit();self.reply(200,result);return
+    if result is not None:
+     if tenant['service_mode']=='tax_only' and path=='/api/market/products' and self.command=='GET':result=[p for p in result if __import__('re').fullmatch(r'tax_preparation_\d{4}',p['service_code'])]
+     c.commit();self.reply(200,result);return
     c=stack.enter_context(tenant_connect(tenant_id))
+    analyst_result=tax_analyst.dispatch(path,self.command,body,c,u)
+    if analyst_result is not None:c.commit();self.reply(200,analyst_result);return
     tax_result=tax_preparation.dispatch(path,self.command,body,c,u)
     if tax_result is not None:c.commit();self.reply(200,tax_result);return
     if path=='/api/financial-statements' and self.command=='GET':self.reply(200,financial_statements(c));return

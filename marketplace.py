@@ -239,7 +239,7 @@ def dispatch(path,method,body,c,user,tenant_id):
         if not admin:raise a.ServiceError('Super administrator required',403)
         if body.get('work_state') not in ('new','in_progress','completed','suspended'):raise a.ServiceError('Invalid fulfillment state')
         if not c.execute('SELECT 1 FROM market_services WHERE order_id=?',(body.get('order_id'),)).fetchone():raise a.ServiceError('Service not found',404)
-        c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment=\'live\' THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
+        c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment IN (\'live\',\'coupon\') THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
         a.audit(c,user['id'],'Marketplace fulfillment updated '+str(body.get('order_id')));return {'ok':True}
     if user['role'] not in ('admin','super_admin'):raise a.ServiceError('Workspace administrator required to purchase',403)
     if route=='checkout' and method=='POST':return checkout(c,body,user,tenant_id)
