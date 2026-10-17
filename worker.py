@@ -36,9 +36,9 @@ def execute(connect=app.connect, allow_provider=True):
             data=a.unseal(job['payload']);kind=job['kind']
             if not allow_provider and (kind.startswith('payroll_') or kind=='efile_submit'):
                 raise a.ServiceError('Provider onboarding unavailable for this workspace',503)
-            if kind.startswith('payroll_') and data.get('_environment')!=a.os.environ.get('CHECK_ENV','sandbox'):
+            if kind.startswith('payroll_') and data.get('_environment')!=a.settings.get('CHECK_ENV','sandbox'):
                 raise a.ServiceError('Payroll environment changed after approval; create a new workflow',503)
-            if kind=='efile_submit' and data.get('_gateway')!=a.os.environ.get('EFILE_GATEWAY_URL',''):
+            if kind=='efile_submit' and data.get('_gateway')!=a.settings.get('EFILE_GATEWAY_URL',''):
                 raise a.ServiceError('E-file gateway changed after approval; create a new workflow',503)
             data={k:v for k,v in data.items() if not k.startswith('_')}
             if kind=='payroll_create':

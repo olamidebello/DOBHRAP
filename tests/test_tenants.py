@@ -186,3 +186,20 @@ class TenantTests(unittest.TestCase):
         with patch.dict(os.environ,{'DOBHRAP_ENABLE_MARKETPLACE':'1','PAYMENTS_ENV':'test','STRIPE_SECRET_KEY':'sk_test_fixture','STRIPE_WEBHOOK_SECRET':'whsec_fixture'}):
             with self.assertRaises(HTTPError) as error:self.request('/api/market/webhooks/stripe',{})
             self.assertEqual(error.exception.code,400)
+
+    def test_support_and_provider_settings_http_permissions(self):
+        with self.assertRaises(HTTPError):self.request('/api/provider-settings')
+        tid=self.register('ticket-owner');self.register('ticket-other')
+        owner,csrf=self.login('ticket-owner@example.com');other,other_csrf=self.login('ticket-other@example.com')
+        with self.assertRaises(HTTPError) as error:self.request('/api/provider-settings',client=owner)
+        self.assertEqual(error.exception.code,403)
+        ticket=self.request('/api/support/tickets',{'subject':'Login help','message':'Please explain workspace switching'},owner,csrf)
+        with self.assertRaises(HTTPError) as error:self.request('/api/support/thread',{'id':ticket['id']},other,other_csrf)
+        self.assertEqual(error.exception.code,404)
+        self.assertEqual(self.request('/api/support/thread',{'id':ticket['id']},owner,csrf)['ticket']['tenant_id'],tid)
+        root,token=self.login('platform@example.com','platform-password-1234')
+        with self.assertRaises(HTTPError) as error:self.request('/api/provider-settings',{'action':'save','values':{'SUPPORT_AI_MODEL':'test-model'},'confirm_password':'platform-password-1234'},root,'bad')
+        self.assertEqual(error.exception.code,403)
+        self.request('/api/provider-settings',{'action':'save','values':{'OPENAI_API_KEY':'sk-proj-http-test-fixture'},'confirm_password':'platform-password-1234'},root,token)
+        config=self.request('/api/provider-settings',client=root)
+        self.assertNotIn('sk-proj-http-test-fixture',json.dumps(config));self.assertTrue(config['settings']['OPENAI_API_KEY']['configured'])

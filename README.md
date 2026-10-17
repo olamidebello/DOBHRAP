@@ -248,3 +248,31 @@ Check the scheduler:
 systemctl status oob-business-marketplace.timer --no-pager
 journalctl -u oob-business-marketplace.service -n 30 --no-pager
 ```
+
+### Super administrator provisioning, credentials and API profiling
+
+Run this on the hosting server to install the GUI, support worker and credential provisioning:
+
+```sh
+cd /root/DOBHRAP-oob
+git pull --ff-only
+ansible-playbook -i 'dobhrap,' -c local ansible/provision-gui-oob.yml
+```
+
+The playbook builds/tests the release, preserves persistent encryption/setup secrets, creates a support integration token only when absent, verifies the service timers and frontend, and profiles configured OpenAI/Stripe/Paystack/Plaid API access with read-only calls. Results and connection timings are saved to `/var/log/oob-provision-readiness.json` and the GUI. It does not invent provider keys, create merchant accounts, purchase services, or complete merchant KYC. Unconfigured providers remain visibly unconfigured. The database and its separately backed-up encryption key are needed to recover encrypted provider credentials.
+
+After first-run super admin setup, open **Provider provisioning & keys**. The console lets the platform super administrator configure keys, environments, model selection and financial feature switches; check provider access; provision the Stripe endpoint; rotate a support intake token; and inspect database/queue readiness and connection timings. Confirm the current administrator password for changes and checks. Enabling live financial operations requires an additional explicit confirmation. Saved keys are encrypted, masked by presence, never returned by read APIs, and never placed in audit messages. Blank key inputs preserve values; Disable creates an empty override. GUI values override server environment values and are read by the web service and background workers without changing shared process environment or requiring a restart. Account creation and API keys still come from each provider's own account pages, linked in the GUI. No OpenAI key needs to be created in ChatGPT for this workflow.
+
+The **Generate / rotate support integration token** action returns only the newly generated token once, in a masked field with Copy/Dismiss controls. Save it in your external automation's secret store. Read APIs cannot recover it; rotating invalidates the old token. The initial generated operator copy is root-only at `/etc/oob-support-intake.token`; after GUI rotation that original copy is obsolete. `/etc/oob-marketplace-webhook.json` is also an operator-side record; GUI Stripe signing-secret overrides take precedence.
+
+The profiler reports configured providers, read-only connection test outcomes and elapsed milliseconds, database integrity, active workspace count and pending support/payment work. It does not measure billing cost, guarantee provider permissions beyond the tested endpoint, confirm webhook delivery, or certify that a merchant is approved for live sales.
+
+### User manual, support tickets and AI automation
+
+Open **User manual** to search product guidance and download the manual, or see [docs/USER-MANUAL.md](docs/USER-MANUAL.md). **Support center & tickets** supports ticket creation, priorities, conversation history, replies, close/reopen, human escalation, AI consent revocation and AI job status. Users see their own tickets; workspace administrators see workspace tickets; platform super administrators see all tickets and can reply as staff. Cross-workspace requests are rejected. Support remains available when no AI key is configured. Tickets/messages are backed up with the central database. Attachments, email delivery and external chat connectors are not included.
+
+To activate AI assistance, save an OpenAI API key and a Responses-compatible model ID available to your project in the provisioning console; run its model-access check, then enable AI support. Automatic AI replies are a separate optional switch. Each customer must explicitly consent for that ticket to send its conversation to OpenAI. The agent receives only the product manual and a bounded excerpt of that ticket's conversation, requests no provider-side response storage, uses at most 800 output tokens per request, has no action tools and cannot change accounts, permissions, keys, deployment or financial records. Replies are labelled AI; review suggestions and escalate for human help. Configure your OpenAI project's spend limits separately. The implementation caps AI jobs at 30 per workspace per rolling day and one job per customer message. Failed/uncertain paid requests are not automatically retried. Human escalation or consent revocation cancels queued work; in-flight requests cannot be unsent, and their answers are discarded if consent or ticket eligibility changes.
+
+`oob-business-support.timer` runs each minute. It processes one queued AI reply per run and flags unanswered open tickets for human escalation after four hours for high priority or 24 hours otherwise. These are local queue rules, not a promise of staff response time. No email, Slack or other outbound messages are sent.
+
+For external automation, configure or generate a **Support webhook token** in the super admin GUI, then POST to `/api/support/intake` with `Authorization: Bearer <your token>` and JSON fields `tenant_id`, `subject`, `message`, and optional `priority` (`low`, `normal`, `high`). The workspace must exist and be active. The API only creates a ticket and does not execute commands. Integration intake cannot grant AI consent for another person; its tickets are for workspace/platform administrators. Never include credentials, SSNs, card numbers or bank account numbers in support conversations.

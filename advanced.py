@@ -2,6 +2,7 @@
 No credentials or bank access tokens are returned through APIs or audit records.
 """
 import csv
+import provider_settings as settings
 import hashlib
 import io
 import json
@@ -96,33 +97,33 @@ def initialize(c):
         c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)', a)
 
 def plaid(endpoint, body):
-    env = os.environ.get('PLAID_ENV', 'sandbox')
+    env = settings.get('PLAID_ENV', 'sandbox')
     if env not in ('sandbox', 'production'): raise ServiceError('Invalid Plaid environment', 503)
-    if not os.environ.get('PLAID_CLIENT_ID') or not os.environ.get('PLAID_SECRET'):
+    if not settings.get('PLAID_CLIENT_ID') or not settings.get('PLAID_SECRET'):
         raise ServiceError('Plaid credentials are not configured', 503)
-    if env == 'production' and os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING') != '1':
+    if env == 'production' and settings.get('DOBHRAP_ENABLE_LIVE_BANKING') != '1':
         raise ServiceError('Production banking is disabled', 503)
     return request_json('https://' + env + '.plaid.com' + endpoint,
-                        {**body, 'client_id': os.environ['PLAID_CLIENT_ID'], 'secret': os.environ['PLAID_SECRET']})
+                        {**body, 'client_id': settings.get('PLAID_CLIENT_ID'), 'secret': settings.get('PLAID_SECRET')})
 
 def check_api(endpoint, body=None, method=None, idempotency_key=None):
-    env = os.environ.get('CHECK_ENV', 'sandbox')
+    env = settings.get('CHECK_ENV', 'sandbox')
     if env not in ('sandbox', 'production'): raise ServiceError('Invalid Check environment', 503)
-    if env == 'production' and os.environ.get('DOBHRAP_ENABLE_LIVE_PAYROLL') != '1':
+    if env == 'production' and settings.get('DOBHRAP_ENABLE_LIVE_PAYROLL') != '1':
         raise ServiceError('Production payroll is disabled', 503)
-    if not os.environ.get('CHECK_API_KEY'): raise ServiceError('Check credentials are not configured', 503)
+    if not settings.get('CHECK_API_KEY'): raise ServiceError('Check credentials are not configured', 503)
     host = 'sandbox.checkhq.com' if env == 'sandbox' else 'api.checkhq.com'
-    headers={'Authorization':'Bearer '+os.environ['CHECK_API_KEY'],'Check-Version':'2025-01-01'}
+    headers={'Authorization':'Bearer '+settings.get('CHECK_API_KEY'),'Check-Version':'2025-01-01'}
     if idempotency_key:headers['X-Idempotency-Key']=idempotency_key
     return request_json('https://' + host + endpoint,body,headers,method)
 
 def efile_api(endpoint, body=None, method=None, transmit=False):
-    base = os.environ.get('EFILE_GATEWAY_URL', '').rstrip('/')
-    if not base or not os.environ.get('EFILE_GATEWAY_TOKEN'):
+    base = settings.get('EFILE_GATEWAY_URL', '').rstrip('/')
+    if not base or not settings.get('EFILE_GATEWAY_TOKEN'):
         raise ServiceError('No authorized e-file gateway configured; direct IRS transmission is not implemented', 503)
-    if transmit and os.environ.get('DOBHRAP_ENABLE_EFILE_TRANSMISSION') != '1':
+    if transmit and settings.get('DOBHRAP_ENABLE_EFILE_TRANSMISSION') != '1':
         raise ServiceError('E-file transmission is disabled', 503)
-    return request_json(base + endpoint, body, {'Authorization': 'Bearer ' + os.environ['EFILE_GATEWAY_TOKEN']}, method)
+    return request_json(base + endpoint, body, {'Authorization': 'Bearer ' + settings.get('EFILE_GATEWAY_TOKEN')}, method)
 
 # Federal ordinary-income estimates only. Source: IRS Rev. Proc. 2025-32, section 4.01.
 BRACKETS = {
@@ -168,7 +169,7 @@ def validate_workflow(c, kind, body):
                     except InvalidOperation:raise ServiceError('Invalid earnings hours') from None
                     if not h.is_finite() or not 0<h<=744: raise ServiceError('Invalid earnings hours')
         # Filter payload to avoid arbitrary bank/funding or correction overrides.
-        return {**{k:body[k] for k in ('company','period_start','period_end','payday','items')}, '_environment':os.environ.get('CHECK_ENV','sandbox')}
+        return {**{k:body[k] for k in ('company','period_start','period_end','payday','items')}, '_environment':settings.get('CHECK_ENV','sandbox')}
     if kind == 'payroll_release':
         job = c.execute('SELECT * FROM jobs WHERE id=?', (body['job_id'],)).fetchone()
         if not job or job['state'] != 'preview_ready': raise ServiceError('A successful provider payroll preview is required')
@@ -188,7 +189,7 @@ def validate_workflow(c, kind, body):
         identifier(body['provider_return_id']); identifier(body['signature_authorization_id'])
         if str(body['tax_year']) not in ('2025','2026'): raise ServiceError('Unsupported year')
         if body['form'] not in ('1040','941','940','1120','1065'): raise ServiceError('Unsupported filing form')
-        return {**{k:body[k] for k in ('provider_return_id','signature_authorization_id','form','tax_year','consent_confirmed')}, '_gateway':os.environ.get('EFILE_GATEWAY_URL','')}
+        return {**{k:body[k] for k in ('provider_return_id','signature_authorization_id','form','tax_year','consent_confirmed')}, '_gateway':settings.get('EFILE_GATEWAY_URL','')}
     if kind in ('invoice_post','bill_post'):
         module = 'invoices' if kind == 'invoice_post' else 'bills'
         row = c.execute('SELECT * FROM records WHERE id=? AND module=?',(body['record_id'],module)).fetchone()
@@ -204,7 +205,7 @@ def validate_workflow(c, kind, body):
 def sync_bank(c, item_id):
     row=c.execute('SELECT * FROM bank_items WHERE id=? AND active=1',(item_id,)).fetchone()
     if not row: raise ServiceError('Bank connection not found')
-    if row['environment'] != os.environ.get('PLAID_ENV','sandbox'): raise ServiceError('Connection environment mismatch')
+    if row['environment'] != settings.get('PLAID_ENV','sandbox'): raise ServiceError('Connection environment mismatch')
     secret=unseal(row['secret']); cursor=row['cursor']; pages=[]
     # Collect all pages before applying any of the changes or cursor. Failures are safe to retry.
     for _ in range(100):
@@ -240,17 +241,17 @@ def dispatch(path, method, body, c, user, post_journal, tenant_id=1):
     if bank_result is not None:return bank_result
     if tenant_id!=1:
         if route=='status' and method=='GET':
-            return {'banking':{'configured':bank_import.allowed(tenant_id) and bool(os.environ.get('PLAID_CLIENT_ID') and os.environ.get('PLAID_SECRET')),'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1','statements_enabled':os.environ.get('DOBHRAP_ENABLE_BANK_STATEMENTS')=='1','automatic_import':os.environ.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')=='1'},'payroll':{'configured':False,'live_enabled':False},'efile':{'configured':False,'transmission_enabled':False},'encryption_configured':bool(os.environ.get('DOBHRAP_ENCRYPTION_KEY')),'notice':'Banking requires platform opt-in and each connection owner’s consent. Payroll and e-filing require separate workspace onboarding.'}
+            return {'banking':{'configured':bank_import.allowed(tenant_id) and bool(settings.get('PLAID_CLIENT_ID') and settings.get('PLAID_SECRET')),'live_enabled':settings.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1','statements_enabled':settings.get('DOBHRAP_ENABLE_BANK_STATEMENTS')=='1','automatic_import':settings.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')=='1'},'payroll':{'configured':False,'live_enabled':False},'efile':{'configured':False,'transmission_enabled':False},'encryption_configured':bool(os.environ.get('DOBHRAP_ENCRYPTION_KEY')),'notice':'Banking requires platform opt-in and each connection owner’s consent. Payroll and e-filing require separate workspace onboarding.'}
         if (route=='bank/disconnect' and not bank_import.allowed(tenant_id)) or route=='jobs/refresh' or (route=='workflows' and method=='POST' and body.get('kind') not in ('invoice_post','bill_post')):
             raise ServiceError('Provider onboarding is not configured for this workspace',503)
     if route=='status' and method=='GET':
-        return {'banking':{'provider':'Plaid','environment':os.environ.get('PLAID_ENV','sandbox'),
-                'configured':bool(os.environ.get('PLAID_CLIENT_ID') and os.environ.get('PLAID_SECRET')),
-                'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1','statements_enabled':os.environ.get('DOBHRAP_ENABLE_BANK_STATEMENTS')=='1','automatic_import':os.environ.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')=='1'},
-                'payroll':{'provider':'Check','environment':os.environ.get('CHECK_ENV','sandbox'),
-                'configured':bool(os.environ.get('CHECK_API_KEY')),'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_PAYROLL')=='1'},
-                'efile':{'provider':'Custom authorized gateway adapter required','configured':bool(os.environ.get('EFILE_GATEWAY_URL') and os.environ.get('EFILE_GATEWAY_TOKEN')),
-                'transmission_enabled':os.environ.get('DOBHRAP_ENABLE_EFILE_TRANSMISSION')=='1'},
+        return {'banking':{'provider':'Plaid','environment':settings.get('PLAID_ENV','sandbox'),
+                'configured':bool(settings.get('PLAID_CLIENT_ID') and settings.get('PLAID_SECRET')),
+                'live_enabled':settings.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1','statements_enabled':settings.get('DOBHRAP_ENABLE_BANK_STATEMENTS')=='1','automatic_import':settings.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')=='1'},
+                'payroll':{'provider':'Check','environment':settings.get('CHECK_ENV','sandbox'),
+                'configured':bool(settings.get('CHECK_API_KEY')),'live_enabled':settings.get('DOBHRAP_ENABLE_LIVE_PAYROLL')=='1'},
+                'efile':{'provider':'Custom authorized gateway adapter required','configured':bool(settings.get('EFILE_GATEWAY_URL') and settings.get('EFILE_GATEWAY_TOKEN')),
+                'transmission_enabled':settings.get('DOBHRAP_ENABLE_EFILE_TRANSMISSION')=='1'},
                 'encryption_configured':bool(os.environ.get('DOBHRAP_ENCRYPTION_KEY'))}
     if route=='tax/estimate' and method=='POST': return estimate_tax(body)
     if route=='bank/items' and method=='GET':
@@ -316,8 +317,8 @@ def dispatch(path, method, body, c, user, post_journal, tenant_id=1):
         job=c.execute('SELECT j.*,w.kind FROM jobs j JOIN workflows w ON w.id=j.workflow_id WHERE j.id=?',(body['id'],)).fetchone()
         if not job or not job['provider_id']:raise ServiceError('No provider reference available')
         config=unseal(c.execute('SELECT payload FROM workflows WHERE id=?',(job['workflow_id'],)).fetchone()['payload'])
-        if job['kind'].startswith('payroll_') and config.get('_environment')!=os.environ.get('CHECK_ENV','sandbox'):raise ServiceError('Provider environment changed',409)
-        if job['kind']=='efile_submit' and config.get('_gateway')!=os.environ.get('EFILE_GATEWAY_URL',''):raise ServiceError('Provider gateway changed',409)
+        if job['kind'].startswith('payroll_') and config.get('_environment')!=settings.get('CHECK_ENV','sandbox'):raise ServiceError('Provider environment changed',409)
+        if job['kind']=='efile_submit' and config.get('_gateway')!=settings.get('EFILE_GATEWAY_URL',''):raise ServiceError('Provider gateway changed',409)
         if job['kind'].startswith('payroll_'):
             result=check_api('/payrolls/'+identifier(job['provider_id'])+'?include_items=true')
         elif job['kind']=='efile_submit':result=efile_api('/submissions/'+identifier(job['provider_id']))

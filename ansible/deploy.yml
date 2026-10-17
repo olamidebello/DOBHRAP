@@ -58,7 +58,7 @@
       register: branding_asset
     - name: Derive immutable source release ID
       ansible.builtin.set_fact:
-        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/marketplace.py') + lookup('file', app_source + '/tests/test_marketplace.py') + lookup('file', app_source + '/bank_import.py') + lookup('file', app_source + '/tests/test_bank_import.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
+        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/provider_settings.py') + lookup('file', app_source + '/support.py') + lookup('file', app_source + '/support-ui.js') + lookup('file', app_source + '/tests/test_support.py') + lookup('file', app_source + '/marketplace.py') + lookup('file', app_source + '/tests/test_marketplace.py') + lookup('file', app_source + '/bank_import.py') + lookup('file', app_source + '/tests/test_bank_import.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
@@ -105,7 +105,7 @@
         owner: root
         group: "{{ service_user }}"
         mode: '0640'
-      loop: [assets/oob-logo.png, assets/app-icon-192.png, assets/app-icon-512.png, assets/app-icon.svg, manifest.webmanifest, service-worker.js, app.py, advanced.py, marketplace.py, bank_import.py, worker.py, backup.py, index.html, advanced.js, workspace.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py, tests/test_bank_import.py, tests/test_marketplace.py]
+      loop: [assets/oob-logo.png, assets/app-icon-192.png, assets/app-icon-512.png, assets/app-icon.svg, manifest.webmanifest, service-worker.js, app.py, advanced.py, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, worker.py, backup.py, index.html, advanced.js, workspace.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py, tests/test_bank_import.py, tests/test_marketplace.py, tests/test_support.py]
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
@@ -182,7 +182,7 @@
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: stopped
-      loop: ["{{ service_name }}-worker.timer", "{{ service_name }}-worker.service", "{{ service_name }}-bank-import.timer", "{{ service_name }}-bank-import.service", "{{ service_name }}-marketplace.timer", "{{ service_name }}-marketplace.service"]
+      loop: ["{{ service_name }}-worker.timer", "{{ service_name }}-worker.service", "{{ service_name }}-bank-import.timer", "{{ service_name }}-bank-import.service", "{{ service_name }}-marketplace.timer", "{{ service_name }}-marketplace.service", "{{ service_name }}-support.timer", "{{ service_name }}-support.service"]
       failed_when: false
     - name: Inspect installed application services
       ansible.builtin.service_facts:
@@ -242,6 +242,7 @@
       loop:
         - {name: "{{ service_name }}", description: DOBHRAP web service, type: simple, script: app.py, restart: 'Restart=on-failure'}
         - {name: "{{ service_name }}-worker", description: DOBHRAP approval job worker, type: oneshot, script: worker.py, restart: 'TimeoutStartSec=180'}
+        - {name: "{{ service_name }}-support", description: Support ticket automation and consent-based AI, type: oneshot, script: support.py, restart: 'TimeoutStartSec=180'}
         - {name: "{{ service_name }}-marketplace", description: Marketplace payment confirmation and fulfillment, type: oneshot, script: marketplace.py, restart: 'TimeoutStartSec=600'}
         - {name: "{{ service_name }}-bank-import", description: Consent-based bank imports, type: oneshot, script: bank_import.py, restart: 'TimeoutStartSec=600'}
         - {name: "{{ service_name }}-backup", description: DOBHRAP database backup, type: oneshot, script: backup.py, restart: 'TimeoutStartSec=180'}
@@ -257,7 +258,7 @@
           {% if item.name == service_name + '-worker' %}
           OnUnitInactiveSec=60s
           OnBootSec=60s
-          {% elif item.name == service_name + '-marketplace' %}
+          {% elif item.name in [service_name + '-marketplace', service_name + '-support'] %}
           OnBootSec=90s
           OnUnitInactiveSec=60s
           {% elif item.name == service_name + '-bank-import' %}
@@ -272,6 +273,7 @@
           WantedBy=timers.target
       loop:
         - {name: "{{ service_name }}-worker"}
+        - {name: "{{ service_name }}-support"}
         - {name: "{{ service_name }}-marketplace"}
         - {name: "{{ service_name }}-bank-import"}
         - {name: "{{ service_name }}-backup"}
@@ -283,6 +285,8 @@
           - "/etc/systemd/system/{{ service_name }}.service"
           - "/etc/systemd/system/{{ service_name }}-worker.service"
           - "/etc/systemd/system/{{ service_name }}-backup.service"
+          - "/etc/systemd/system/{{ service_name }}-support.service"
+          - "/etc/systemd/system/{{ service_name }}-support.timer"
           - "/etc/systemd/system/{{ service_name }}-marketplace.service"
           - "/etc/systemd/system/{{ service_name }}-marketplace.timer"
           - "/etc/systemd/system/{{ service_name }}-bank-import.service"
@@ -345,7 +349,7 @@
         enabled: true
         state: started
         daemon_reload: true
-      loop: ["{{ service_name }}", "{{ service_name }}-worker.timer", "{{ service_name }}-bank-import.timer", "{{ service_name }}-marketplace.timer", "{{ service_name }}-backup.timer"]
+      loop: ["{{ service_name }}", "{{ service_name }}-worker.timer", "{{ service_name }}-bank-import.timer", "{{ service_name }}-marketplace.timer", "{{ service_name }}-support.timer", "{{ service_name }}-backup.timer"]
     - name: Verify application identity on the selected private port
       ansible.builtin.uri:
         url: "http://127.0.0.1:{{ app_port }}/api/identity"
@@ -478,7 +482,7 @@
         group: root
         mode: '0600'
         directory_mode: '0700'
-      loop: [app.py, advanced.py, marketplace.py, bank_import.py, advanced.js, workspace.js, worker.py, backup.py, index.html, requirements.txt, README.md, manifest.webmanifest, service-worker.js, 'ansible/', 'tests/', 'assets/', 'mobile/']
+      loop: [app.py, advanced.py, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, advanced.js, workspace.js, worker.py, backup.py, index.html, requirements.txt, README.md, manifest.webmanifest, service-worker.js, 'ansible/', 'tests/', 'assets/', 'mobile/']
       when: not (ansible_connection == 'local' and (app_source | realpath) == '/opt/oob-control')
     - name: Install root-owned fixed-operation management broker
       ansible.builtin.copy:

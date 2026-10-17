@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import provider_settings as settings
 import time
 import uuid
 from urllib.request import Request, build_opener
@@ -24,23 +25,23 @@ def initialize(c):
 
 
 def allowed(tenant_id):
-    return tenant_id==1 or os.environ.get('DOBHRAP_ENABLE_TENANT_BANKING')=='1'
+    return tenant_id==1 or settings.get('DOBHRAP_ENABLE_TENANT_BANKING')=='1'
 
 
 def owned(c,item_id,user):
     row=c.execute('SELECT * FROM bank_items WHERE id=? AND active=1',(item_id,)).fetchone()
     if not row:raise a.ServiceError('Active bank connection not found',404)
     if row['owner']!=user['id'] and user['role']!='super_admin':raise a.ServiceError('Only the connection owner can manage this bank',403)
-    if row['environment']!=os.environ.get('PLAID_ENV','sandbox'):raise a.ServiceError('Connection environment mismatch',409)
+    if row['environment']!=settings.get('PLAID_ENV','sandbox'):raise a.ServiceError('Connection environment mismatch',409)
     return row
 
 
 def pdf_download(secret,statement_id):
     # The provider URL is fixed. Never follow redirects or accept a browser-supplied URL.
-    env=os.environ.get('PLAID_ENV','sandbox')
-    if env not in ('sandbox','production') or (env=='production' and os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING')!='1'):
+    env=settings.get('PLAID_ENV','sandbox')
+    if env not in ('sandbox','production') or (env=='production' and settings.get('DOBHRAP_ENABLE_LIVE_BANKING')!='1'):
         raise a.ServiceError('Banking environment is disabled',503)
-    payload={**secret,'statement_id':statement_id,'client_id':os.environ['PLAID_CLIENT_ID'],'secret':os.environ['PLAID_SECRET']}
+    payload={**secret,'statement_id':statement_id,'client_id':settings.get('PLAID_CLIENT_ID'),'secret':settings.get('PLAID_SECRET')}
     req=Request('https://'+env+'.plaid.com/statements/download',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'})
     try:
         with build_opener(a.NoRedirect).open(req,timeout=30) as response:
@@ -53,7 +54,7 @@ def pdf_download(secret,statement_id):
 
 
 def import_statements(c,row):
-    if not row['statements_consent'] or os.environ.get('DOBHRAP_ENABLE_BANK_STATEMENTS')!='1':return 0
+    if not row['statements_consent'] or settings.get('DOBHRAP_ENABLE_BANK_STATEMENTS')!='1':return 0
     secret=a.unseal(row['secret']);listing=a.plaid('/statements/list',secret);count=0
     for account in listing.get('accounts',[]):
         for statement in account.get('statements',[]):
@@ -98,13 +99,13 @@ def dispatch(route,method,body,c,user,tenant_id):
         if body.get('consent') is not True:raise a.ServiceError('Bank data consent is required')
         row=owned(c,body.get('item_id'),user) if route=='bank/reconnect' else None
         statements=bool(row['statements_consent']) if row else body.get('statements') is True
-        if statements and os.environ.get('DOBHRAP_ENABLE_BANK_STATEMENTS')!='1':raise a.ServiceError('Bank PDF statements are not enabled',503)
+        if statements and settings.get('DOBHRAP_ENABLE_BANK_STATEMENTS')!='1':raise a.ServiceError('Bank PDF statements are not enabled',503)
         opts={'client_name':'OOB Business','user':{'client_user_id':'tenant-'+str(tenant_id)+'-user-'+str(user['id'])},'country_codes':['US'],'language':'en'}
         if row:opts['access_token']=a.unseal(row['secret'])['access_token']
         else:
             opts['products']=['transactions']+(['statements'] if statements else [])
             if statements:opts['statements']={'start_date':(a.date.today()-a.timedelta(days=90)).isoformat(),'end_date':a.date.today().isoformat()}
-        if os.environ.get('PLAID_REDIRECT_URI'):opts['redirect_uri']=os.environ['PLAID_REDIRECT_URI']
+        if settings.get('PLAID_REDIRECT_URI'):opts['redirect_uri']=settings.get('PLAID_REDIRECT_URI')
         token=a.plaid('/link/token/create',opts)['link_token']
         nonce=uuid.uuid4().hex
         c.execute('DELETE FROM bank_link_sessions WHERE expires<?',(int(time.time()),))
@@ -121,7 +122,7 @@ def dispatch(route,method,body,c,user,tenant_id):
             result=a.plaid('/item/public_token/exchange',{'public_token':body['public_token']})
             item_id=result['item_id']
             c.execute('INSERT INTO bank_items(id,owner,environment,secret,auto_import,statements_consent) VALUES(?,?,?,?,1,?)',
-                      (item_id,user['id'],os.environ.get('PLAID_ENV','sandbox'),a.seal({'access_token':result['access_token']}),link['statements_consent']))
+                      (item_id,user['id'],settings.get('PLAID_ENV','sandbox'),a.seal({'access_token':result['access_token']}),link['statements_consent']))
         c.execute('DELETE FROM bank_link_sessions WHERE nonce=?',(nonce,))
         c.execute("UPDATE bank_items SET next_sync=0,sync_error='' WHERE id=?",(item_id,))
         a.audit(c,user['id'],'bank consent completed; automatic import authorized')
@@ -149,7 +150,7 @@ def dispatch(route,method,body,c,user,tenant_id):
 
 def run_all():
     import app
-    if os.environ.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')!='1':return
+    if settings.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')!='1':return
     with app.connect() as catalog:
         tenants=[r['id'] for r in catalog.execute("SELECT id FROM tenants WHERE status='active' ORDER BY id")]
     for tid in tenants:

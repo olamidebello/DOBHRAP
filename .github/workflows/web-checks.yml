@@ -23,6 +23,8 @@ jobs:
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/bank-import-oob.yml
       - name: Check marketplace Ansible syntax
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/marketplace-oob.yml
+      - name: Check GUI provisioning Ansible syntax
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/provision-gui-oob.yml
       - name: Run API and isolation tests
         run: python -m unittest discover -s tests -v
       - name: Install browser test runtime

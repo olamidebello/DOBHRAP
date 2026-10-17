@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import provider_settings as settings
 import re
 import time
 import uuid
@@ -35,17 +36,17 @@ def initialize(c):
     ''')
 
 
-def enabled():return os.environ.get('DOBHRAP_ENABLE_MARKETPLACE')=='1'
+def enabled():return settings.get('DOBHRAP_ENABLE_MARKETPLACE')=='1'
 def environment():
-    env=os.environ.get('PAYMENTS_ENV','test')
+    env=settings.get('PAYMENTS_ENV','test')
     if env not in ('test','live'):raise a.ServiceError('Invalid payment environment',503)
-    if env=='live' and os.environ.get('DOBHRAP_ENABLE_LIVE_PAYMENTS')!='1':raise a.ServiceError('Live payments are disabled',503)
+    if env=='live' and settings.get('DOBHRAP_ENABLE_LIVE_PAYMENTS')!='1':raise a.ServiceError('Live payments are disabled',503)
     return env
 
 
 def key(gateway):
     if gateway not in ('stripe','paystack'):raise a.ServiceError('Unsupported payment gateway')
-    env=environment();secret=os.environ.get(gateway.upper()+'_SECRET_KEY','')
+    env=environment();secret=settings.get(gateway.upper()+'_SECRET_KEY','')
     if not secret.startswith('sk_'+env+'_'):raise a.ServiceError('Configure the selected gateway key for this payment environment',503)
     return secret
 
@@ -56,8 +57,8 @@ def readiness():
         try:key(gateway);configured=enabled()
         except a.ServiceError:configured=False
         gateways.append({'id':gateway,'currency':currency,'configured':configured,
-                         'signing_key_configured':bool(os.environ.get('STRIPE_WEBHOOK_SECRET')) if gateway=='stripe' else configured})
-    return {'enabled':enabled(),'environment':os.environ.get('PAYMENTS_ENV','test'),'gateways':gateways,
+                         'signing_key_configured':bool(settings.get('STRIPE_WEBHOOK_SECRET')) if gateway=='stripe' else configured})
+    return {'enabled':enabled(),'environment':settings.get('PAYMENTS_ENV','test'),'gateways':gateways,
             'notice':'One-time platform service offers. Test purchases create test service records. No recurring billing or reseller payouts.'}
 
 
@@ -173,7 +174,7 @@ def webhook(c,gateway,raw,headers):
     secret=key(gateway)
     if not enabled():raise a.ServiceError('Marketplace disabled',503)
     if gateway=='stripe':
-        signing=os.environ.get('STRIPE_WEBHOOK_SECRET','')
+        signing=settings.get('STRIPE_WEBHOOK_SECRET','')
         if not signing:raise a.ServiceError('Stripe webhook secret not configured',503)
         parts=[x.split('=',1) for x in headers.get('Stripe-Signature','').split(',') if '=' in x]
         stamp=next((v for k,v in parts if k=='t'),'0')
