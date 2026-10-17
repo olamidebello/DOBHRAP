@@ -1,0 +1,43 @@
+name: Workspace API and browser checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['*.py', '*.js', '*.html', 'tests/**', '.github/workflows/web-checks.yml']
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install application dependencies
+        run: pip install -r requirements.txt
+      - name: Run API and isolation tests
+        run: python -m unittest discover -s tests -v
+      - name: Install browser test runtime
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Start synthetic test server
+        run: |
+          python tests/browser_fixture.py > /tmp/oob-browser-server.log 2>&1 &
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8765/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/oob-browser-server.log
+          exit 1
+      - name: Check desktop and mobile interactions
+        run: node tests/browser-smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-browser-checks
+          path: test-results/
