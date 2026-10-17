@@ -70,7 +70,7 @@ def check(provider):
  import advanced as a
  import marketplace as m
  if provider=='openai':
-  key=get('OPENAI_API_KEY','');model=get('SUPPORT_AI_MODEL','') or get('TAX_AI_MODEL','')
+  key=get('OPENAI_API_KEY','');model=get('SUPPORT_AI_MODEL','') or get('TAX_AI_MODEL','') or get('TAX_ANALYST_MODEL','')
   if not key or not model:raise a.ServiceError('Configure an OpenAI key and model first')
   a.request_json('https://api.openai.com/v1/models/'+a.identifier(model),headers={'Authorization':'Bearer '+key},method='GET')
  elif provider=='stripe':
