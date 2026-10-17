@@ -9,16 +9,39 @@ def connect():
  c=sqlite3.connect(DB,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
 
 def password(p,s): return hashlib.scrypt(p.encode(),salt=bytes.fromhex(s),n=16384,r=8,p=1).hex()
+def setup_account(c, body):
+ c.execute('BEGIN IMMEDIATE')
+ if c.execute('SELECT 1 FROM users').fetchone(): raise advanced.ServiceError('Setup has already been completed',409)
+ row=c.execute("SELECT value FROM setup_state WHERE key='token_hash'").fetchone()
+ supplied=str(body.get('token',''))
+ if not row or not hmac.compare_digest(row['value'],hashlib.sha256(supplied.encode()).hexdigest()):
+  raise advanced.ServiceError('Invalid setup token',403)
+ email=str(body.get('email','')).strip().lower(); p=str(body.get('password',''))
+ if len(email)>254 or '@' not in email or any(x.isspace() for x in email): raise ValueError('Enter a valid email')
+ if not 14<=len(p)<=1024: raise ValueError('Password must contain 14 to 1024 characters')
+ if p!=body.get('confirm_password'): raise ValueError('Passwords do not match')
+ salt=secrets.token_hex(16)
+ uid=c.execute('INSERT INTO users(email,salt,hash,role) VALUES(?,?,?,?)',(email,salt,password(p,salt),'super_admin')).lastrowid
+ c.execute("DELETE FROM setup_state WHERE key='token_hash'")
+ c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(uid,'Initial super administrator provisioned'))
+ return {'ok':True}
+
 def init():
  Path(DB).parent.mkdir(parents=True,exist_ok=True)
  with connect() as c:
   c.executescript('''CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE, salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,module TEXT,data TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS accounts(code TEXT PRIMARY KEY,name TEXT,type TEXT); CREATE TABLE IF NOT EXISTS journals(id INTEGER PRIMARY KEY,memo TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS lines(id INTEGER PRIMARY KEY,journal_id INTEGER REFERENCES journals(id),account TEXT REFERENCES accounts(code),debit INTEGER,credit INTEGER); CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,user_id INTEGER,action TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);''')
+  c.execute('CREATE TABLE IF NOT EXISTS setup_state(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
   advanced.initialize(c)
   for a in [('1000','Cash','asset'),('1100','Accounts receivable','asset'),('2000','Accounts payable','liability'),('3000','Equity','equity'),('4000','Sales','income'),('5000','Operating expense','expense'),('5100','Wages','expense')]: c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)',a)
   if not c.execute('SELECT 1 FROM users').fetchone():
    p=os.environ.get('DOBHRAP_ADMIN_PASSWORD',''); email=os.environ.get('DOBHRAP_ADMIN_EMAIL','admin@example.com')
-   if len(p)<14: raise RuntimeError('Set DOBHRAP_ADMIN_PASSWORD to at least 14 characters')
-   s=secrets.token_hex(16); c.execute('INSERT INTO users(email,salt,hash,role) VALUES(?,?,?,?)',(email,s,password(p,s),'admin'))
+   if p:
+    if len(p)<14: raise RuntimeError('Set DOBHRAP_ADMIN_PASSWORD to at least 14 characters')
+    s=secrets.token_hex(16); c.execute('INSERT INTO users(email,salt,hash,role) VALUES(?,?,?,?)',(email,s,password(p,s),'admin'))
+   else:
+    token=os.environ.get('DOBHRAP_SETUP_TOKEN','')
+    if len(token)<32: raise RuntimeError('Configure DOBHRAP_SETUP_TOKEN with at least 32 characters for browser setup')
+    c.execute("INSERT OR IGNORE INTO setup_state VALUES('token_hash',?)",(hashlib.sha256(token.encode()).hexdigest(),))
 
 def post_journal(c,memo,lines):
  if len(lines)<2: raise ValueError('At least two journal lines required')
@@ -50,6 +73,11 @@ class Handler(BaseHTTPRequestHandler):
     if not 0<=size<=100000: self.reply(413,{'error':'Request too large'}); return
     body=json.loads(self.rfile.read(size) or b'{}')
    with connect() as c:
+    if path=='/api/setup/status' and self.command=='GET':
+     self.reply(200,{'required':not bool(c.execute('SELECT 1 FROM users').fetchone())}); return
+    if path=='/api/setup' and self.command=='POST':
+     if self.headers.get('X-Setup-Request')!='1': self.reply(403,{'error':'Use the setup page'}); return
+     result=setup_account(c,body); c.commit(); self.reply(201,result); return
     if path=='/api/login' and self.command=='POST':
      u=c.execute('SELECT * FROM users WHERE email=?',(body.get('email'),)).fetchone()
      if not u or not hmac.compare_digest(u['hash'],password(body.get('password',''),u['salt'])): time.sleep(.5); self.reply(401,{'error':'Invalid credentials'}); return
@@ -63,9 +91,13 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/me': self.reply(200,{'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':MODULES}); return
     if path=='/api/logout' and self.command=='POST': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
     if self.command=='POST' and u['role']=='viewer': self.reply(403,{'error':'Read-only role'}); return
+    if path=='/api/users' and self.command=='GET':
+     if u['role'] not in ('admin','super_admin'): self.reply(403,{'error':'Administrator required'}); return
+     self.reply(200,[dict(row) for row in c.execute('SELECT id,email,role FROM users ORDER BY id')]); return
     if path=='/api/users' and self.command=='POST':
-     if u['role']!='admin': self.reply(403,{'error':'Administrator required'}); return
-     if len(body.get('password',''))<14 or body.get('role') not in ('admin','editor','viewer'): raise ValueError('Password needs 14 characters and valid role')
+     if u['role'] not in ('admin','super_admin'): self.reply(403,{'error':'Administrator required'}); return
+     if len(body.get('password',''))<14 or body.get('role') not in ('super_admin','admin','editor','viewer'): raise ValueError('Password needs 14 characters and valid role')
+     if body.get('role')=='super_admin' and u['role']!='super_admin': self.reply(403,{'error':'Super administrator required'}); return
      s=secrets.token_hex(16); c.execute('INSERT INTO users(email,salt,hash,role) VALUES(?,?,?,?)',(body['email'],s,password(body['password'],s),body['role'])); result={'ok':True}
     elif path=='/api/reports':
      rows=[dict(r) for r in c.execute('SELECT a.*,coalesce(sum(l.debit),0) debit,coalesce(sum(l.credit),0) credit FROM accounts a LEFT JOIN lines l ON l.account=a.code GROUP BY a.code')]; self.reply(200,{'trial_balance':rows,'audit':[dict(r) for r in c.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 100')]}); return

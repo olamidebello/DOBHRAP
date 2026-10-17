@@ -231,7 +231,7 @@ def sync_bank(c, item_id):
 
 def dispatch(path, method, body, c, user, post_journal):
     if not path.startswith('/api/advanced/'): return None
-    if user['role']!='admin': raise ServiceError('Administrator access required for financial operations',403)
+    if user['role'] not in ('admin','super_admin'): raise ServiceError('Administrator access required for financial operations',403)
     route=path[len('/api/advanced/'):]
     if route=='status' and method=='GET':
         return {'banking':{'provider':'Plaid','environment':os.environ.get('PLAID_ENV','sandbox'),
@@ -358,3 +358,4 @@ def record_locked(c, module, record_id):
     for row in c.execute("SELECT payload FROM workflows WHERE kind=? AND state NOT IN ('draft','pending_approval','cancelled','rejected','blocked')",(kind,)):
         if unseal(row['payload']).get('record_id')==int(record_id):return True
     return False
+

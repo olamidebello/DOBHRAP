@@ -23,13 +23,13 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Set `DOBHRAP_ADMIN_EMAIL`, a unique `DOBHRAP_ADMIN_PASSWORD` of at least 14 characters, and a persistent `DOBHRAP_ENCRYPTION_KEY`. Generate the encryption key with `.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` and store it securely outside the repository. Then:
+Set a private random `DOBHRAP_SETUP_TOKEN` of at least 32 characters and a persistent `DOBHRAP_ENCRYPTION_KEY`. Generate a setup token with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. Leave `DOBHRAP_ADMIN_PASSWORD` unset for browser setup. Generate the encryption key with `.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` and store it securely outside the repository. Then:
 
 ```bash
 .venv/bin/python app.py
 ```
 
-Open http://127.0.0.1:8080. The first launch creates the administrator. An environment password change does not reset an existing administrator account. Create a second administrator through Users for independent approvals. Run the worker in another terminal with the identical database, encryption key and provider configuration:
+Open http://127.0.0.1:8080. On first launch, enter the setup token, email, password and confirmation in the setup GUI. It creates a super administrator, signs in, and permanently closes setup. The token is stored only as a hash in the database. Existing accounts are preserved. Legacy environment-password bootstrap remains available when explicitly configured; it creates an ordinary administrator. Create a second administrator through Users for independent financial approvals. Run the worker in another terminal with the identical database, encryption key and provider configuration:
 
 ```bash
 .venv/bin/python worker.py
@@ -122,4 +122,16 @@ On the Debian hosting server, run from this repository (install Ansible first if
 ansible-playbook -i 'dobhrap,' -c local ansible/deploy-oob.yml
 ```
 
-The playbook prompts privately for the initial administrator password and backs up and replaces this domain's nginx configuration, then configures HTTPS. Existing DOBHRAP accounts are unchanged. DNS must point at this server. Supply your existing encrypted integration settings with `--ask-vault-pass -e @/path/to/encrypted-secrets.yml` to retain configured provider settings; without them deployment uses disabled sandbox defaults. This targets the apex domain only. Review any other enabled nginx files declaring the same domain before running.
+The playbook requires no interactive application password. It generates `/etc/dobhrap-setup.token` with root-only permissions, backs up and replaces this domain's nginx configuration, then configures HTTPS. Existing DOBHRAP accounts are unchanged. DNS must point at this server. Supply your existing encrypted integration settings with `--ask-vault-pass -e @/path/to/encrypted-secrets.yml` to retain configured provider settings; without them deployment uses disabled sandbox defaults. This targets the apex domain only. Review any other enabled nginx files declaring the same domain before running.
+
+## First-run super administrator GUI
+
+After deploying `ansible/deploy-oob.yml`, read the setup token privately on the server:
+
+```bash
+sudo cat /etc/dobhrap-setup.token
+```
+
+Open https://olamideolatayobello.com/ and enter the token, your email, a password of at least 14 characters, and confirmation. The first account receives the `super_admin` role. Setup is protected by a custom request header and a one-time server token; an immediate database transaction prevents simultaneous setup attempts from creating multiple owners. Setup cannot be reopened by restarting or redeploying. Do not post the setup token publicly.
+
+Super Admin navigation opens the console for user management, integrations, approvals, reports and audit access. Super administrators can create additional super administrators; ordinary administrators cannot grant that role. All financial operations still require their existing independent approvals. Existing ordinary administrators are not automatically elevated. This remains a single-company application.
