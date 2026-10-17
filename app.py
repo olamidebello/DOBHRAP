@@ -240,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
     tax_services.enforce(c,path,self.command,body,tenant,u)
     if path=='/api/tax-services/status' and self.command=='GET':self.reply(200,tax_services.status(c,tenant_id,u));return
-    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':{} if tenant['service_mode']=='tax_only' else MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return
+    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':{} if tenant['service_mode']=='tax_only' and u['role']!='super_admin' else MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return
     if path=='/api/users':
      if u['role'] not in ('admin','super_admin'):self.reply(403,{'error':'Administrator required'});return
      if self.command=='GET':self.reply(200,[dict(row) for row in c.execute('SELECT id,email,role FROM users WHERE tenant_id=? ORDER BY id',(tenant_id,))]);return

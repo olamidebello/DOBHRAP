@@ -14,7 +14,7 @@ def status(c,tenant_id,user):
  return {'paid_years':years,'payment_required':True,'filing_available':False,'notice':'Verified live payment or an accepted service coupon for a tax-year preparation service is required before building or exporting preparation. Payment does not enable IRS e-filing; a completed filing engine and authorized integration are not available in this interview.'}
 
 def enforce(c,path,method,body,tenant,user):
- if tenant['service_mode']!='tax_only':return
+ if tenant['service_mode']!='tax_only' or user['role']=='super_admin':return
  allowed=path=='/api/me' or path=='/api/tax-services/status' or path=='/api/coupons/redeem' or path.startswith(('/api/tax-prep/','/api/tax-analyst/','/api/support/')) or path in ('/api/market/status','/api/market/products','/api/market/orders','/api/market/services','/api/market/checkout','/api/market/verify')
  if not allowed:raise a.ServiceError('This account provides tax services only',403)
  if path in ('/api/market/checkout','/api/coupons/redeem'):

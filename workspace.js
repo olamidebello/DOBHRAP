@@ -25,7 +25,7 @@ function availablePage(page){
 function shortcuts(){try{return JSON.parse(localStorage.getItem(`oob-shortcuts-${currentUserId}-${currentTenantId}`)||'[]').filter(availablePage)}catch{return []}}
 function navigationButton(page){if(page==='tax_preparation')return `<details open class="tax-prep-menu"><summary>${esc(pageLabel(page))}</summary><button type="button" data-page="tax_preparation">${esc(pageLabel(page))}</button><button type="button" data-page="tax_return_2026">${esc(pageLabel('tax_return_2026'))}</button><div class="tax-prep-menu"><button type="button" data-page="tax_analyst">Tax analyst</button></div></details>`;return `<button type="button" data-page="${page}" title="${esc(pageLabel(page))}">${esc(pageLabel(page))}</button>`}
 function buildNavigation(me){
- taxOnlyAccount=me.tenant.service_mode==='tax_only';
+ taxOnlyAccount=me.tenant.service_mode==='tax_only'&&me.role!=='super_admin';
  currentUserId=me.id;currentTenantId=me.tenant.id;
  const saved=shortcuts();
  document.querySelector('#nav').innerHTML='<label class="nav-search">Find a module<input id="nav-search" type="search" placeholder="Search navigation…" aria-label="Search navigation"></label>'+ (saved.length?`<details open><summary>Bookmarks</summary>${saved.map(navigationButton).join('')}</details>`:'')+navGroups.map(([name,pages])=>{pages=pages.filter(availablePage);return pages.length?`<details open data-nav-group><summary>${esc(t(name))}</summary>${pages.map(navigationButton).join('')}</details>`:''}).join('');

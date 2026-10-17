@@ -21,6 +21,9 @@ class TaxServiceTests(unittest.TestCase):
    with self.assertRaises(HTTPError) as e:self.request(path,body,client,csrf)
    self.assertEqual(e.exception.code,402)
   self.assertEqual(self.request('/api/tax-services/status',client=client)['paid_years'],[])
+  root,token=self.login('platform@example.com','platform-password-1234')
+  self.assertTrue(self.request('/api/me',client=root,tenant=tid)['modules'])
+  self.assertEqual(len(self.request('/api/tenants',client=root)),2)
  def test_live_verified_year_specific_payment_only(self):
   tid,client,csrf=self.account()
   with app.connect() as c:

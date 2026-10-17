@@ -178,7 +178,7 @@ const assert=require('assert');
   await page.locator('#registration input[name=password]').fill('tax-only-password-123');
   await page.locator('#registration input[name=confirm_password]').fill('tax-only-password-123');
   await page.locator('#registration button').click();
-  await page.getByRole('heading',{name:'Tax services & payment',exact:true}).waitFor();
+  await page.locator('#content').getByRole('heading',{name:'Tax services & payment',exact:true}).waitFor();
   assert.equal(await page.locator('#nav [data-page=customers]').count(),0);
   assert.equal(await page.locator('#nav [data-page=payroll_processing]').count(),0);
   await page.locator('#content [data-go=tax_return_2026]').click();
