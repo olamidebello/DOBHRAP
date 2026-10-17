@@ -135,3 +135,18 @@ sudo cat /etc/dobhrap-setup.token
 Open https://olamideolatayobello.com/ and enter the token, your email, a password of at least 14 characters, and confirmation. The first account receives the `super_admin` role. Setup is protected by a custom request header and a one-time server token; an immediate database transaction prevents simultaneous setup attempts from creating multiple owners. Setup cannot be reopened by restarting or redeploying. Do not post the setup token publicly.
 
 Super Admin navigation opens the console for user management, integrations, approvals, reports and audit access. Super administrators can create additional super administrators; ordinary administrators cannot grant that role. All financial operations still require their existing independent approvals. Existing ordinary administrators are not automatically elevated. This remains a single-company application.
+
+## Automatic diagnosis and repair
+
+On the hosting server, run:
+
+```bash
+git pull --ff-only
+ansible-playbook -i 'dobhrap,' -c local ansible/repair-oob.yml
+```
+
+This local-only repair inspects the original port, dedicated-service overrides and candidate listeners. It deploys under `oob-business` with a free private port from 18761–18800, retaining that port in `/etc/oob-business.port`. An occupied port is reused only when its owning dedicated process identifies itself as this suite. It never kills unrelated listeners. Conflicting dedicated-suite overrides are backed up under `/var/backups/oob-repair`; a unit name owned by another application causes a clear stop instead of replacement.
+
+Existing provider settings are retained privately, the database is backed up, the encryption key and setup token are preserved, all tests and systemd validation run before service activation, and nginx routing is repaired with backups. Final checks require private and public application identity, HTTPS, the actual logo and active worker/backup timers. A safe report with recommendations is saved at `/var/log/oob-repair-report.json`; `verified: true` appears only after those checks succeed. Network/DNS/certificate failures stop with the failing task; a public success is never inferred from a generic HTTP 200.
+
+Use `repair-oob.yml` for later redeployments so the selected port remains consistent. The legacy `dobhrap` service is left untouched by the repair's service selection; inspect it before retiring it. Do not run a second deployment concurrently. Keep `/etc/dobhrap.env.before-oob-repair`, `/etc/oob-repair-integrations.json`, the encryption key and database snapshots private.

@@ -67,6 +67,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('assets').joinpath('oob-logo.png').read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path=='/advanced.js':
     b=Path(__file__).with_name('advanced.js').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
+   if self.command=='GET' and path=='/api/identity': self.reply(200,{'application':'oob-business-suite','version':2}); return
    if path=='/health': self.reply(200,{'status':'ok'}); return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))

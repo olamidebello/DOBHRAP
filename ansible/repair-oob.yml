@@ -1,0 +1,88 @@
+---
+- name: Diagnose and prepare isolated OOB deployment
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require execution on the hosting server
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+        fail_msg: Run this repair on the hosting server with -c local.
+    - name: Inspect existing private configuration
+      ansible.builtin.stat:
+        path: /etc/dobhrap.env
+      register: previous_environment
+    - name: Preserve private configuration before repair
+      ansible.builtin.copy:
+        src: /etc/dobhrap.env
+        dest: /etc/dobhrap.env.before-oob-repair
+        remote_src: true
+        force: false
+        owner: root
+        mode: '0600'
+      when: previous_environment.stat.exists
+      no_log: true
+    - name: Diagnose listeners and repair dedicated-service overrides
+      ansible.builtin.script:
+        cmd: diagnose-repair.py --repair
+        executable: python3
+      register: repair_diagnostics
+      changed_when: (repair_diagnostics.stdout | from_json).changes | length > 0
+    - name: Retain existing provider credentials and switches privately
+      ansible.builtin.include_vars:
+        file: /etc/oob-repair-integrations.json
+      no_log: true
+    - name: Retain diagnostic results for deployment
+      ansible.builtin.set_fact:
+        oob_repair: "{{ repair_diagnostics.stdout | from_json }}"
+    - name: Persist selected private port
+      ansible.builtin.copy:
+        dest: /etc/oob-business.port
+        content: "{{ oob_repair.port }}\n"
+        owner: root
+        mode: '0600'
+    - name: Save safe repair report
+      ansible.builtin.copy:
+        dest: /var/log/oob-repair-report.json
+        content: "{{ oob_repair | to_nice_json }}\n"
+        owner: root
+        mode: '0600'
+    - name: Report detected problem and automatic repair plan
+      ansible.builtin.debug:
+        msg:
+          - "Original port health status: {{ oob_repair.old_health_status }}"
+          - "Dedicated service: {{ oob_repair.service }}; selected port: {{ oob_repair.port }}"
+          - "{{ oob_repair.changes }}"
+          - "{{ oob_repair.recommendations }}"
+
+- import_playbook: deploy.yml
+  vars:
+    domain: olamideolatayobello.com
+    service_name: oob-business
+    app_port: "{{ oob_repair.port }}"
+    replace_domain_config: true
+    admin_email: dobcalldemo@gmail.com
+    admin_password: ""
+
+- name: Confirm completed repair and record recommendations
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify dedicated application and timers are active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop: [oob-business.service, oob-business-worker.timer, oob-business-backup.timer]
+      changed_when: false
+    - name: Record verified repair result
+      ansible.builtin.copy:
+        dest: /var/log/oob-repair-report.json
+        content: "{{ oob_repair | combine({'verified': true}) | to_nice_json }}\n"
+        owner: root
+        mode: '0600'
+    - name: Show verified deployment and recommendations
+      ansible.builtin.debug:
+        msg:
+          - "Verified https://olamideolatayobello.com/ and its application identity, branding and HTTPS."
+          - "Service: oob-business; port: {{ oob_repair.port }}; report: /var/log/oob-repair-report.json"
+          - "{{ oob_repair.recommendations }}"

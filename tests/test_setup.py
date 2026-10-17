@@ -74,6 +74,8 @@ class SetupTests(unittest.TestCase):
             return urlopen(Request(base + path, data=json.dumps(body).encode() if body is not None else None,
                                    headers={'Content-Type': 'application/json', **(headers or {})}))
         try:
+            with request('/api/identity') as response:
+                self.assertEqual(json.load(response)['application'], 'oob-business-suite')
             with request('/api/setup/status') as response:
                 self.assertTrue(json.load(response)['required'])
             with self.assertRaises(HTTPError) as error:
