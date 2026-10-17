@@ -56,7 +56,7 @@
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
-        name: [python3, python3-venv, nginx, certbot, python3-certbot-nginx]
+        name: [python3, python3-venv, nginx, certbot, python3-certbot-nginx, curl]
         update_cache: true
         state: present
     - name: Inspect dedicated application account
@@ -282,6 +282,9 @@
         content: |
           server {
             listen 80;
+            {% if ansible_facts.all_ipv6_addresses | default([]) | length > 0 %}
+            listen [::]:80;
+            {% endif %}
             server_name {{ domain }};
             client_max_body_size 100k;
             location = /api/login {
@@ -328,9 +331,88 @@
         state: reloaded
     - name: Provision HTTPS
       ansible.builtin.command:
-        argv: [certbot, --nginx, --non-interactive, --agree-tos, --redirect, --keep-until-expiring, -m, "{{ admin_email }}", -d, "{{ domain }}"]
+        argv: [certbot, --nginx, --non-interactive, --agree-tos, --redirect, --keep-until-expiring, --cert-name, "{{ domain }}", -m, "{{ admin_email }}", -d, "{{ domain }}"]
       register: certificate
       changed_when: "'no action taken' not in certificate.stdout"
+    - name: Confirm certificate files for managed HTTPS routing
+      ansible.builtin.stat:
+        path: "/etc/letsencrypt/live/{{ domain }}/{{ item }}"
+      loop: [fullchain.pem, privkey.pem]
+      register: domain_certificates
+    - name: Require certificate material before routing HTTPS
+      ansible.builtin.assert:
+        that: item.stat.exists
+        fail_msg: Certificate provisioning did not create the expected certificate files.
+      loop: "{{ domain_certificates.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: Install explicit managed IPv4 and IPv6 HTTPS proxy
+      ansible.builtin.copy:
+        dest: "/etc/nginx/sites-available/{{ domain }}"
+        backup: true
+        mode: '0644'
+        content: |
+          server {
+            listen 80;
+            {% if ansible_facts.all_ipv6_addresses | default([]) | length > 0 %}
+            listen [::]:80;
+            {% endif %}
+            server_name {{ domain }};
+            return 301 https://{{ domain }}$request_uri;
+          }
+          server {
+            listen 443 ssl;
+            {% if ansible_facts.all_ipv6_addresses | default([]) | length > 0 %}
+            listen [::]:443 ssl;
+            {% endif %}
+            server_name {{ domain }};
+            ssl_certificate /etc/letsencrypt/live/{{ domain }}/fullchain.pem;
+            ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            client_max_body_size 100k;
+            location = /api/login {
+              limit_req zone=dobhrap_login burst=5 nodelay;
+              proxy_pass http://127.0.0.1:{{ app_port }};
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto https;
+            }
+            location / {
+              proxy_pass http://127.0.0.1:{{ app_port }};
+              proxy_read_timeout 180s;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto https;
+            }
+          }
+    - name: Remove competing HTTPS domain entries after certificate installation
+      ansible.builtin.script:
+        cmd: "retire-domain.py {{ domain }} /etc/nginx/sites-available/{{ domain }}"
+        executable: python3
+      register: final_domain_cleanup
+      changed_when: "'Updated ' in final_domain_cleanup.stdout"
+    - name: Validate final managed HTTPS configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+    - name: Activate final HTTPS routing
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+    - name: Verify local HTTPS with the correct hostname and certificate
+      ansible.builtin.command:
+        argv: [curl, --fail, --silent, --show-error, --noproxy, '*', --resolve, "{{ domain }}:443:127.0.0.1", "https://{{ domain }}/api/identity"]
+      register: local_tls_identity
+      changed_when: false
+      failed_when: local_tls_identity.rc != 0 or 'oob-business-suite' not in local_tls_identity.stdout
+    - name: Show current domain address resolution for routing diagnosis
+      ansible.builtin.command:
+        argv: [getent, ahosts, "{{ domain }}"]
+      changed_when: false
+      failed_when: false
+      register: public_dns
+    - name: Report DNS addresses and local HTTPS result
+      ansible.builtin.debug:
+        msg:
+          - "Local HTTPS reaches the correct application. Public DNS addresses: {{ public_dns.stdout_lines }}"
+          - "If the public test fails next, compare these addresses with this server and any configured CDN origin."
     - name: Verify readiness
       ansible.builtin.uri:
         url: http://127.0.0.1:{{ app_port }}/health

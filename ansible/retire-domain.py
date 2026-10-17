@@ -8,13 +8,30 @@ import sys
 
 
 def without_domain(text, domain):
-    def replace(match):
-        names = match.group(2).split()
-        if domain not in names:
-            return match.group(0)
-        names = [name for name in names if name != domain]
-        return match.group(1) + ' '.join(names or ['retired-oob.invalid']) + ';'
-    return re.sub(r'(^[ \t]*server_name\s+)([^;#]+);', replace, text, flags=re.M)
+    # Tokenize directives so inline blocks, quoted names and comments are safe.
+    token_pattern = r"\#[^\n]*|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s{};#]+|[{};]"
+    tokens = [m for m in re.finditer(token_pattern, text) if not m.group().startswith('#')]
+    edits = []
+    start = True
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if start and token.group() == 'server_name':
+            end = index + 1
+            while end < len(tokens) and tokens[end].group() not in (';', '{', '}'):
+                end += 1
+            if end < len(tokens) and tokens[end].group() == ';':
+                names = tokens[index + 1:end]
+                if any(name.group().strip('\"\'') == domain for name in names):
+                    kept = [name.group() for name in names if name.group().strip('\"\'') != domain]
+                    edits.append((token.start(), tokens[end].end(), 'server_name ' + ' '.join(kept or ['retired-oob.invalid']) + ';'))
+                index = end
+        start = tokens[index].group() in (';', '{', '}')
+        index += 1
+    for left, right, value in reversed(edits):
+        text = text[:left] + value + text[right:]
+    return text
+
 
 
 def main():
