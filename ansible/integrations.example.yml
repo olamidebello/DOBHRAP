@@ -14,3 +14,10 @@ efile_gateway_token: ''
 enable_live_banking: false
 enable_live_payroll: false
 enable_efile_transmission: false
+
+
+# Bank imports require a user to complete consent and bank login in the GUI.
+enable_auto_bank_import: false
+enable_tenant_banking: false
+# Optional, requires Plaid Statements access and supported banks.
+enable_bank_statements: false

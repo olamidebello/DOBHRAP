@@ -1,0 +1,68 @@
+---
+- name: Configure consent-based bank imports
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars_prompt:
+    - name: bank_environment
+      prompt: Plaid environment (sandbox for testing; production for real banks)
+      private: false
+      default: sandbox
+    - name: bank_client_id
+      prompt: Plaid client ID
+      private: true
+    - name: bank_secret
+      prompt: Plaid secret for the selected environment
+      private: true
+    - name: bank_enable_statements
+      prompt: Enable optional PDF Statements product (requires Plaid access and supported banks; yes/no)
+      private: false
+      default: 'no'
+    - name: bank_production_confirm
+      prompt: Enable real banking if production was selected (yes/no)
+      private: false
+      default: 'no'
+  tasks:
+    - name: Require local execution and a valid provider environment
+      ansible.builtin.assert:
+        that:
+          - ansible_connection == 'local'
+          - bank_environment in ['sandbox', 'production']
+          - bank_environment != 'production' or bank_production_confirm | bool
+        fail_msg: Run locally and explicitly enable production when connecting real banks.
+    - name: Validate credentials privately
+      ansible.builtin.assert:
+        that:
+          - bank_client_id | length > 0
+          - bank_secret | length > 0
+      no_log: true
+    - name: Set private configuration for the repair and deployment plays
+      ansible.builtin.set_fact:
+        plaid_client_id: '{{ bank_client_id }}'
+        plaid_secret: '{{ bank_secret }}'
+        plaid_env: '{{ bank_environment }}'
+        plaid_redirect_uri: https://olamideolatayobello.com/
+        enable_live_banking: "{{ bank_environment == 'production' and bank_production_confirm | bool }}"
+        enable_auto_bank_import: true
+        enable_tenant_banking: true
+        enable_bank_statements: '{{ bank_enable_statements | bool }}'
+      no_log: true
+
+- import_playbook: repair-oob.yml
+
+- name: Verify scheduled bank imports
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify the import timer is active
+      ansible.builtin.command: systemctl is-active oob-business-bank-import.timer
+      changed_when: false
+    - name: Show next steps
+      ansible.builtin.debug:
+        msg:
+          - Register https://olamideolatayobello.com/ as an allowed OAuth redirect in Plaid.
+          - Sign in to the application, open Bank connections, give consent, and complete the bank login.
+          - Authorized imports run every 15 minutes; bank updates can take longer. Pause or disconnect in the GUI.
+          - PDF statements require supported banks and enabled Statements access. Existing available PDFs are downloaded; new on-demand extractions are not triggered.
+          - Sandbox uses test institutions and does not connect real bank accounts.

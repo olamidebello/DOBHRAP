@@ -90,6 +90,8 @@ def initialize(c):
       schedule_id TEXT NOT NULL, due_date TEXT NOT NULL, record_id INTEGER,
       PRIMARY KEY(schedule_id,due_date));
     ''')
+    import bank_import
+    bank_import.initialize(c)
     for a in [('2100', 'Payroll taxes payable', 'liability'), ('2200', 'Wages payable', 'liability')]:
         c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)', a)
 
@@ -225,7 +227,7 @@ def sync_bank(c, item_id):
         for tx in page.get('removed',[]):
             c.execute('UPDATE bank_transactions SET removed=1 WHERE id=? AND item_id=?',(tx['transaction_id'],item_id)); changes+=1
     # Optimistic cursor lease prevents stale parallel sync results from overwriting newer state.
-    if c.execute('UPDATE bank_items SET cursor=? WHERE id=? AND cursor=?',(cursor,item_id,row['cursor'])).rowcount!=1:
+    if c.execute('UPDATE bank_items SET cursor=? WHERE id=? AND active=1 AND cursor=?',(cursor,item_id,row['cursor'])).rowcount!=1:
         raise ServiceError('Concurrent bank sync; retry',409)
     return {'changes':changes,'pages':len(pages)}
 
@@ -233,15 +235,18 @@ def dispatch(path, method, body, c, user, post_journal, tenant_id=1):
     if not path.startswith('/api/advanced/'): return None
     if user['role'] not in ('admin','super_admin'): raise ServiceError('Administrator access required for financial operations',403)
     route=path[len('/api/advanced/'):]
+    import bank_import
+    bank_result=bank_import.dispatch(route,method,body,c,user,tenant_id)
+    if bank_result is not None:return bank_result
     if tenant_id!=1:
         if route=='status' and method=='GET':
-            return {'banking':{'configured':False,'live_enabled':False},'payroll':{'configured':False,'live_enabled':False},'efile':{'configured':False,'transmission_enabled':False},'encryption_configured':bool(os.environ.get('DOBHRAP_ENCRYPTION_KEY')),'notice':'Provider onboarding must be configured for this workspace; platform provider credentials are unavailable.'}
-        if route in ('bank/link-token','bank/exchange','bank/sync','bank/disconnect','jobs/refresh') or (route=='workflows' and method=='POST' and body.get('kind') not in ('invoice_post','bill_post')):
+            return {'banking':{'configured':bank_import.allowed(tenant_id) and bool(os.environ.get('PLAID_CLIENT_ID') and os.environ.get('PLAID_SECRET')),'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1','statements_enabled':os.environ.get('DOBHRAP_ENABLE_BANK_STATEMENTS')=='1','automatic_import':os.environ.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')=='1'},'payroll':{'configured':False,'live_enabled':False},'efile':{'configured':False,'transmission_enabled':False},'encryption_configured':bool(os.environ.get('DOBHRAP_ENCRYPTION_KEY')),'notice':'Banking requires platform opt-in and each connection owner’s consent. Payroll and e-filing require separate workspace onboarding.'}
+        if (route=='bank/disconnect' and not bank_import.allowed(tenant_id)) or route=='jobs/refresh' or (route=='workflows' and method=='POST' and body.get('kind') not in ('invoice_post','bill_post')):
             raise ServiceError('Provider onboarding is not configured for this workspace',503)
     if route=='status' and method=='GET':
         return {'banking':{'provider':'Plaid','environment':os.environ.get('PLAID_ENV','sandbox'),
                 'configured':bool(os.environ.get('PLAID_CLIENT_ID') and os.environ.get('PLAID_SECRET')),
-                'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1'},
+                'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_BANKING')=='1','statements_enabled':os.environ.get('DOBHRAP_ENABLE_BANK_STATEMENTS')=='1','automatic_import':os.environ.get('DOBHRAP_ENABLE_AUTO_BANK_IMPORT')=='1'},
                 'payroll':{'provider':'Check','environment':os.environ.get('CHECK_ENV','sandbox'),
                 'configured':bool(os.environ.get('CHECK_API_KEY')),'live_enabled':os.environ.get('DOBHRAP_ENABLE_LIVE_PAYROLL')=='1'},
                 'efile':{'provider':'Custom authorized gateway adapter required','configured':bool(os.environ.get('EFILE_GATEWAY_URL') and os.environ.get('EFILE_GATEWAY_TOKEN')),
@@ -252,26 +257,6 @@ def dispatch(path, method, body, c, user, post_journal, tenant_id=1):
         return [dict(r) for r in c.execute('SELECT id,owner,environment,active FROM bank_items')]
     if route=='bank/transactions' and method=='GET':
         return [dict(r) for r in c.execute('SELECT * FROM bank_transactions ORDER BY date DESC LIMIT 1000')]
-    if route=='bank/link-token' and method=='POST':
-        cipher()
-        opts={'client_name':'DOBHRAP','user':{'client_user_id':str(user['id'])},'products':['transactions'],'country_codes':['US'],'language':'en'}
-        if os.environ.get('PLAID_REDIRECT_URI'): opts['redirect_uri']=os.environ['PLAID_REDIRECT_URI']
-        return {'link_token':plaid('/link/token/create',opts)['link_token']}
-    if route=='bank/exchange' and method=='POST':
-        cipher()
-        result=plaid('/item/public_token/exchange',{'public_token':body['public_token']})
-        c.execute('INSERT INTO bank_items(id,owner,environment,secret) VALUES(?,?,?,?)',
-                  (result['item_id'],user['id'],os.environ.get('PLAID_ENV','sandbox'),seal({'access_token':result['access_token']})))
-        audit(c,user['id'],'bank connection added'); return {'id':result['item_id']}
-    if route=='bank/sync' and method=='POST':
-        result=sync_bank(c,body['item_id']); audit(c,user['id'],'bank transactions synchronized'); return result
-    if route=='bank/disconnect' and method=='POST':
-        row=c.execute('SELECT * FROM bank_items WHERE id=? AND active=1',(body['item_id'],)).fetchone()
-        if not row:raise ServiceError('Active bank connection not found')
-        if row['environment']!=os.environ.get('PLAID_ENV','sandbox'): raise ServiceError('Connection environment mismatch')
-        plaid('/item/remove',unseal(row['secret']))
-        c.execute("UPDATE bank_items SET active=0,secret='',cursor='' WHERE id=?",(row['id'],))
-        audit(c,user['id'],'bank connection revoked');return {'disconnected':True}
     if route=='bank/import' and method=='POST':
         rows=list(csv.DictReader(io.StringIO(body['csv'])))
         if not rows or len(rows)>500: raise ServiceError('CSV requires 1 to 500 rows')

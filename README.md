@@ -184,3 +184,31 @@ The GUI deploys the trusted source installed by Ansible, not arbitrary GitHub br
 The Android WebView project is in `mobile/`. The `Android preview APK` workflow builds and lints it using Java 17, Gradle 8.9 and Android Gradle Plugin 8.7.3, then publishes the APK to the `android-preview` prerelease. Its workflow runs on changes to `mobile/` or its workflow file, and can also be started manually in GitHub Actions. This is a debug-signed preview, not a production-signed or Play Store release. Signing for production, device testing, publishing and fully native behavior remain separate work. The preview uses a separate application ID and keeps the debug key in the Actions cache for preview upgrade continuity; cache eviction can require reinstalling the preview.
 
 The downloads page checks the published GitHub release before showing the APK link. A queued or failed build is never presented as a downloadable APK. External links open the device browser; provider OAuth and CSV downloads should be verified on the target device. The app is a live-site wrapper with the same account and tenant isolation as the browser.
+
+### Automatic bank imports with user consent
+
+Run on the hosting server inside tmux:
+
+```sh
+cd /root/DOBHRAP-oob
+git pull --ff-only
+ansible-playbook -i 'dobhrap,' -c local ansible/bank-import-oob.yml
+```
+
+The playbook privately prompts for your Plaid client ID and environment-specific secret, repairs the deployment, and installs `oob-business-bank-import.timer`. Register `https://olamideolatayobello.com/` as an OAuth redirect in your Plaid dashboard. Sandbox connects test banks; production requires approved Plaid access and an explicit confirmation. Never enter bank passwords in Ansible or share them in chat. For unattended configuration, provide the prompt variables using an Ansible Vault encrypted vars file, for example `-e @/root/bank-import.vault.yml --ask-vault-pass`.
+
+Sign in to the business workspace, open **Bank connections**, check consent, then choose **Connect bank with Plaid**. Bank authentication and any MFA occur in Plaid Link or the bank's OAuth screen. The current authenticated application's user and workspace own the connection. A short-lived, single-use completion nonce binds each Link flow to that user and workspace. OAuth redirects resume only in the matching browser user/workspace context. Bank cookies and passwords are never collected. Access tokens and PDF documents are encrypted with the persistent deployment key; back up that key separately from the databases.
+
+The first import starts after linking. The timer checks authorized connections every 15 minutes, including active opted-in workspaces, using incremental transaction cursors and duplicate-safe IDs. The bank/provider determines when new data becomes available; this is not a real-time feed. Failed reads retry with an hour backoff. Use **Reconnect bank login** for expired bank authorization, **Pause automatic imports** to stop scheduled reads, or **Disconnect** to revoke the provider connection. Existing connections are not silently opted in; their owner must enable automatic imports. Imported transactions require review and explicit ledger posting.
+
+Optional PDF imports require enabling the **Statements** product during setup and separate user consent when connecting a new bank. Support depends on the institution and Plaid product approval (currently US banks). Available statement PDFs are listed, downloaded with size/checksum validation, encrypted in the workspace database, and downloadable only through authenticated workspace APIs. Each run imports up to ten missing PDFs per connection; remaining files catch up on later runs. Transaction data and bank PDF statements are separate products. The scheduler does not trigger new on-demand statement extractions or bypass bank login/MFA; PDFs not made available by the provider cannot be imported. CSV statement imports remain available as a fallback. To add Statements consent to an older Transactions-only connection, connect again with PDF consent; disconnect the older connection to avoid overlapping feeds.
+
+Settings preserved by future `repair-oob.yml` runs: `enable_auto_bank_import`, `enable_tenant_banking`, `enable_bank_statements`, and existing Plaid settings. Payroll and e-filing stay isolated from this bank-only opt-in. Connection owners (or the platform super administrator) manage connections; authorized workspace administrators can review imported business transactions and PDFs. A suspended workspace is excluded from scheduled imports. The scheduler never posts ledger entries, moves money, or submits payroll.
+
+Check scheduling without exposing secrets:
+
+```sh
+systemctl status oob-business-bank-import.timer --no-pager
+systemctl list-timers oob-business-bank-import.timer --no-pager
+journalctl -u oob-business-bank-import.service -n 30 --no-pager
+```

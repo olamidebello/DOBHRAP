@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['*.py', '*.js', '*.html', 'tests/**', '.github/workflows/web-checks.yml']
+    paths: ['*.py', '*.js', '*.html', 'tests/**', 'ansible/**', '.github/workflows/web-checks.yml']
 permissions:
   contents: read
 jobs:
@@ -18,7 +18,9 @@ jobs:
         with:
           node-version: '22'
       - name: Install application dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt ansible-core==2.17.14
+      - name: Check bank import Ansible syntax
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/bank-import-oob.yml
       - name: Run API and isolation tests
         run: python -m unittest discover -s tests -v
       - name: Install browser test runtime
