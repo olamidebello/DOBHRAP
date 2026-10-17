@@ -233,13 +233,30 @@
           [Unit]
           Description={{ item.name }} schedule
           [Timer]
-          {{ item.schedule | join('\n') }}
+          {% if item.name == 'dobhrap-worker' %}
+          OnUnitInactiveSec=60s
+          OnBootSec=60s
+          {% else %}
+          OnCalendar=daily
+          Persistent=true
+          {% endif %}
           Unit={{ item.name }}.service
           [Install]
           WantedBy=timers.target
       loop:
-        - {name: dobhrap-worker, schedule: ['OnUnitInactiveSec=60s', 'OnBootSec=60s']}
-        - {name: dobhrap-backup, schedule: ['OnCalendar=daily', 'Persistent=true']}
+        - {name: dobhrap-worker}
+        - {name: dobhrap-backup}
+    - name: Verify generated systemd timers and services before activation
+      ansible.builtin.command:
+        argv:
+          - systemd-analyze
+          - verify
+          - /etc/systemd/system/dobhrap.service
+          - /etc/systemd/system/dobhrap-worker.service
+          - /etc/systemd/system/dobhrap-backup.service
+          - /etc/systemd/system/dobhrap-worker.timer
+          - /etc/systemd/system/dobhrap-backup.timer
+      changed_when: false
     - name: Install nginx login throttling
       ansible.builtin.copy:
         dest: /etc/nginx/conf.d/dobhrap-upstream.conf
