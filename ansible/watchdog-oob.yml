@@ -1,0 +1,188 @@
+---
+# Install: ansible-playbook -i 'dobhrap,' -c local ansible/watchdog-oob.yml
+- name: Install database-aware OOB health watchdog
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars:
+    watchdog_service: oob-business
+    watchdog_port: 18761
+  tasks:
+    - name: Validate dedicated target
+      ansible.builtin.assert:
+        that:
+          - watchdog_service in ['oob-business', 'dobhrap']
+          - watchdog_port | int > 1024
+          - watchdog_port | int < 65536
+    - name: Inspect application service
+      ansible.builtin.command:
+        argv: [systemctl, cat, '{{ watchdog_service }}.service']
+      register: watchdog_unit
+      changed_when: false
+    - name: Require the expected application and private environment
+      ansible.builtin.assert:
+        that:
+          - "'/opt/dobhrap/current/app.py' in watchdog_unit.stdout"
+          - "'EnvironmentFile=/etc/dobhrap.env' in watchdog_unit.stdout"
+    - name: Install private state directory
+      ansible.builtin.file:
+        path: /var/lib/oob-watchdog
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Install trusted watchdog
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/oob-watchdog.py
+        owner: root
+        group: root
+        mode: '0700'
+        content: |
+          #!/usr/bin/python3
+          """Check startup DB reads; restart only the dedicated web unit with cooldown."""
+          import fcntl
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import time
+          import urllib.error
+          import urllib.request
+
+          ROOT = pathlib.Path('/var/lib/oob-watchdog')
+          SERVICE = '{{ watchdog_service }}.service'
+          STATE = ROOT / 'status.json'
+
+          def request(port, path, status, field, expected):
+              try:
+                  try:
+                      response = urllib.request.urlopen(
+                          'http://127.0.0.1:%d%s' % (port, path), timeout=4)
+                  except urllib.error.HTTPError as error:
+                      response = error
+                  with response:
+                      body = json.loads(response.read(65536))
+                      return response.code == status and body.get(field) == expected
+              except (OSError, ValueError, TypeError, AttributeError):
+                  return False
+
+          def check(port):
+              identity = request(port, '/api/identity', 200, 'application', 'oob-business-suite')
+              # Completed setup must stay completed; never create users or reset data.
+              setup = request(port, '/api/setup/status', 200, 'required', False)
+              session = request(port, '/api/me', 401, 'error', 'Sign in required')
+              return {'identity': identity, 'database': setup, 'anonymous_session': session}
+
+          def save(state):
+              temporary = STATE.with_suffix('.tmp')
+              temporary.write_text(json.dumps(state, indent=2) + '\n')
+              os.chmod(temporary, 0o600)
+              temporary.replace(STATE)
+              print(json.dumps(state), flush=True)
+
+          def main():
+              with (ROOT / 'lock').open('w') as lock:
+                  try:
+                      fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  except BlockingIOError:
+                      return
+                  try:
+                      previous = json.loads(STATE.read_text())
+                  except (OSError, ValueError):
+                      previous = {}
+                  # Read the actual service environment instead of guessing its selected port.
+                  env = {}
+                  for line in pathlib.Path('/etc/dobhrap.env').read_text().splitlines():
+                      if '=' in line and not line.lstrip().startswith('#'):
+                          key, value = line.split('=', 1)
+                          env[key.strip()] = value.strip().strip('\"').strip("'")
+                  port = int(env.get('PORT', '{{ watchdog_port }}'))
+                  if not 1024 < port < 65536:
+                      raise ValueError('Invalid application port')
+                  checks = check(port)
+                  failures = 0 if all(checks.values()) else int(previous.get('failures', 0)) + 1
+                  now = int(time.time())
+                  state = {'checked_at': now, 'checks': checks, 'failures': failures,
+                           'last_restart': int(previous.get('last_restart', 0)),
+                           'action': 'healthy' if not failures else 'observing', 'service': SERVICE}
+                  # Two consecutive failures, at most one restart per 15 minutes.
+                  if failures >= 2 and now - state['last_restart'] >= 900:
+                      # Do not restart an unrelated service if a unit was replaced after installation.
+                      unit = subprocess.run(['systemctl', 'cat', SERVICE], capture_output=True,
+                                            text=True, timeout=10)
+                      if unit.returncode or '/opt/dobhrap/current/app.py' not in unit.stdout or 'EnvironmentFile=/etc/dobhrap.env' not in unit.stdout:
+                          state['action'] = 'target_validation_failed'
+                      else:
+                          state.update(last_restart=now, action='restart_pending')
+                          save(state)
+                          result = subprocess.run(['systemctl', 'restart', SERVICE],
+                                                  capture_output=True, timeout=40)
+                          state['action'] = 'restart_failed'
+                          if result.returncode == 0:
+                              for attempt in range(6):
+                                  time.sleep(2)
+                                  state['checks'] = check(port)
+                                  if all(state['checks'].values()):
+                                      state.update(failures=0, action='recovered')
+                                      break
+                              else:
+                                  state['action'] = 'operator_required'
+                  elif failures >= 2:
+                      state['action'] = 'cooldown_operator_required'
+                  save(state)
+
+          if __name__ == '__main__':
+              main()
+    - name: Install watchdog service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-watchdog.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=OOB database-aware health checks and bounded web recovery
+          After=network.target
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/python3 /usr/local/sbin/oob-watchdog.py
+          TimeoutStartSec=240
+          UMask=0077
+          NoNewPrivileges=true
+          ProtectHome=true
+          ProtectSystem=strict
+          ReadWritePaths=/var/lib/oob-watchdog
+          PrivateTmp=true
+    - name: Install recurring event every minute
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-watchdog.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Check OOB health every minute
+          [Timer]
+          OnBootSec=90s
+          OnUnitInactiveSec=60s
+          AccuracySec=5s
+          Unit=oob-watchdog.service
+          [Install]
+          WantedBy=timers.target
+    - name: Validate watchdog Python
+      ansible.builtin.command:
+        argv: [python3, -c, "import ast; ast.parse(open('/usr/local/sbin/oob-watchdog.py').read())"]
+      changed_when: false
+    - name: Enable recurring checks
+      ansible.builtin.systemd:
+        name: oob-watchdog.timer
+        daemon_reload: true
+        enabled: true
+        state: restarted
+    - name: Run initial check and record current status
+      ansible.builtin.systemd:
+        name: oob-watchdog.service
+        state: started
+    - name: Show operating instructions
+      ansible.builtin.debug:
+        msg:
+          - 'Checks every minute; restarts the dedicated web service after two failures with a 15-minute cooldown.'
+          - 'Status: sudo cat /var/lib/oob-watchdog/status.json'
+          - 'Events: sudo journalctl -u oob-watchdog.service'
+          - 'Persistent database/schema/permissions faults require ansible/repair-oob.yml; no data is deleted or financial jobs retried.'
