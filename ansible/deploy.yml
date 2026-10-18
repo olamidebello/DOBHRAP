@@ -223,6 +223,9 @@
           [Unit]
           Description={{ item.description }}
           After=network.target
+          {% if item.type == "simple" %}
+          StartLimitIntervalSec=0
+          {% endif %}
           [Service]
           Type={{ item.type }}
           User={{ service_user }}
@@ -231,6 +234,9 @@
           EnvironmentFile=/etc/dobhrap.env
           ExecStart={{ app_root }}/current/venv/bin/python {{ app_root }}/current/{{ item.script }}
           {{ item.restart }}
+          {% if item.type == "simple" %}
+          RestartSec=10s
+          {% endif %}
           NoNewPrivileges=true
           ProtectSystem=strict
           ProtectHome=true
