@@ -46,7 +46,9 @@ jobs:
           cat /tmp/oob-browser-server.log
           exit 1
       - name: Check desktop and mobile interactions
-        run: node tests/browser-smoke.cjs
+        run: |
+          node tests/browser-smoke.cjs
+          node tests/browser-client-agreement.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

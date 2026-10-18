@@ -51,6 +51,35 @@ STEP_MAP={x['key']:x for x in STEPS}
 
 DEFAULT_RECORDS=['Taxpayer identification and SSN / ITIN evidence','Spouse and dependent information','W-2 wage statements','1099 income statements and investment records','Business and rental income / expenses','Deductions and charitable contribution records','Education and childcare records','Health insurance / 1095-A','Estimated tax payments','Prior-year tax return']
 
+AGREEMENT_VERSION='2026-10-18.1'
+
+def preparer_terms(body):
+ name=str(body.get('preparer_name','')).strip();ptin=str(body.get('preparer_id','')).strip().upper()
+ if not 2<=len(name)<=120 or not name.isprintable():raise a.ServiceError('Enter the preparer full name')
+ if not re.fullmatch(r'P[0-9]{8}',ptin):raise a.ServiceError('Enter a PTIN in P12345678 format; the platform does not verify IRS registration')
+ try:
+  percent=Decimal(str(body.get('preparer_percentage','')));fee=Decimal(str(body.get('service_fee','')))
+  if not percent.is_finite() or not fee.is_finite() or not 0<=percent<=100 or not 0<=fee<=1000000 or percent!=percent.quantize(Decimal('.01')) or fee!=fee.quantize(Decimal('.01')):raise ValueError()
+ except (ValueError,__import__('decimal').InvalidOperation):raise a.ServiceError('Enter a percentage from 0 to 100 and a nonnegative USD service fee, each with at most two decimal places') from None
+ return {'name':name,'ptin':ptin,'percentage':format(percent,'.2f'),'service_fee_usd':format(fee,'.2f'),'preparer_share_usd':format((fee*percent/100).quantize(Decimal('.01'),rounding=__import__('decimal').ROUND_HALF_UP),'.2f'),'percentage_basis':'agreed_service_fee','credential_verified':False}
+
+def generate_client_agreement(name,email,year,terms):
+ text=(f"TAX PREPARATION ENGAGEMENT AND RECORD SHARING AGREEMENT\nVersion: {AGREEMENT_VERSION}\n"
+       f"Tax year: {year}\nClient: {name} ({email})\nPreparer: {terms['name']}\nPreparer PTIN: {terms['ptin']} (self-reported; not verified by this platform)\n\n"
+       f"SERVICE AND FEE\nThe agreed preparation service fee is USD {terms['service_fee_usd']}. The preparer's allocation is {terms['percentage']}% of that service fee (USD {terms['preparer_share_usd']}). This percentage is not based on the refund, tax savings, income, or tax liability. No payment is collected or refund redirected by this agreement. Any additional fee or changed scope requires a new agreement before acceptance.\n\n"
+       "SCOPE AND RESPONSIBILITIES\nI engage the named preparer to review the records I submit and assist with preparation for the stated tax year. I will provide complete and accurate records, identify missing information, and review the proposed return before authorizing any filing. The preparer is responsible for their professional qualifications and work. No refund amount or tax outcome is guaranteed. This platform currently provides intake and preparation worksheets; a complete validated return and authorized filing provider are required for filing.\n\n"
+       "RECORD SHARING CONSENT\nI authorize storage of the records I choose to upload in this platform and access by the named preparer for this engagement. I will only submit records I am entitled to share, including any necessary spouse or dependent permissions. This agreement does not authorize advertising, sale of records, unrelated disclosures, or sending documents to an AI provider. Separate applicable consent is required for those uses. I may stop further uploads and contact the preparer to end the engagement or request return of my records; records already provided may remain subject to applicable retention duties.\n\n"
+       "ELECTRONIC SIGNATURE\nI can download this agreement before signing. By typing my full name and selecting Sign agreement, I confirm I am the named client or have authority to act for that client, have read these terms, consent to electronic records, and intend my typed name to be my electronic signature. I may decline by closing this page without uploading. Possession of this link and a typed signature do not independently verify identity.\n\n"
+       "LIMITS OF AUTHORIZATION\nThis is an engagement and intake-sharing agreement. It is not an IRS Form 8879 filing authorization, Form 2848 power of attorney, or a blanket substitute for any separately required tax-information use/disclosure consent. No return may be filed solely on the basis of this agreement.")
+ return {'version':AGREEMENT_VERSION,'text':text,'sha256':hashlib.sha256(text.encode()).hexdigest()}
+
+def client_request_view(r,p,signature=None):
+ return {'request_id':r['token_hash'],'created':r['created'],'expires':r['expires'],'revoked':bool(r['revoked']),'client_name':p['name'],'client_email':p['email'],'records':p['records'],'preparer':p.get('preparer'),'agreement':p.get('agreement'),'signature':signature,'requires_reissue':not bool(p.get('agreement'))}
+
+def client_signature(c,key):
+ row=c.execute('SELECT payload FROM tax_client_signatures WHERE request_id=?',(key,)).fetchone()
+ return a.unseal(row['payload']) if row else None
+
 def client_requests(c,route,method,body,user):
  if route=='client-notifications' and method=='GET':
   return [dict(r) for r in c.execute('SELECT id,return_id,created,seen FROM tax_client_notifications WHERE owner=? ORDER BY created DESC LIMIT 100',(user['id'],))]
@@ -59,43 +88,69 @@ def client_requests(c,route,method,body,user):
   c.execute('UPDATE tax_client_notifications SET seen=1 WHERE id=? AND owner=?',(body.get('notification_id'),user['id']));return {'ok':True}
  if user['role']=='viewer':raise a.ServiceError('Read-only account',403)
  row,p=read(c,body.get('id'),user)
+ if route=='client-status':
+  return [client_request_view(r,a.unseal(r['payload']),client_signature(c,r['token_hash'])) for r in c.execute('SELECT * FROM tax_client_requests WHERE return_id=? ORDER BY created DESC,rowid DESC',(row['id'],))]
  if route=='client-revoke':
   c.execute('UPDATE tax_client_requests SET revoked=1 WHERE return_id=?',(row['id'],));return {'ok':True}
- if route=='client-request':
+ if route in ('client-preview','client-request'):
   name=str(body.get('client_name','')).strip();email=str(body.get('client_email','')).strip().lower()
-  if not 1<=len(name)<=120 or '@' not in email or len(email)>254:raise a.ServiceError('Enter client name and email')
+  if not 1<=len(name)<=120 or not name.isprintable() or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254:raise a.ServiceError('Enter client name and email')
   custom=body.get('custom_records',[])
   if not isinstance(custom,list) or len(custom)>20 or any(not isinstance(x,str) or not x.strip() or len(x)>100 or not x.isprintable() for x in custom):raise a.ServiceError('Enter up to twenty custom record names of up to 100 characters')
+  terms=preparer_terms(body);agreement=generate_client_agreement(name,email,row['year'],terms)
+  if route=='client-preview':return {'agreement':agreement,'preparer':terms}
   import secrets
   token=secrets.token_urlsafe(32);now=int(time.time());records=list(dict.fromkeys(DEFAULT_RECORDS+[x.strip() for x in custom]))
   c.execute('UPDATE tax_client_requests SET revoked=1 WHERE return_id=?',(row['id'],))
-  c.execute('INSERT INTO tax_client_requests VALUES(?,?,?,?,?,0)',(hashlib.sha256(token.encode()).hexdigest(),row['id'],a.seal({'name':name,'email':email,'records':records,'not_applicable':[],'consent':False}),now+30*86400,now))
-  return {'token':token,'expires':now+30*86400,'records':records}
+  c.execute('INSERT INTO tax_client_requests VALUES(?,?,?,?,?,0)',(hashlib.sha256(token.encode()).hexdigest(),row['id'],a.seal({'name':name,'email':email,'records':records,'not_applicable':[],'preparer':terms,'agreement':agreement}),now+30*86400,now))
+  import qrcode
+  from urllib.parse import urlencode
+  tid=int(body.get('_tenant_id',1))
+  url='https://olamideolatayobello.com/tax-record-upload#'+urlencode({'tenant_id':tid,'token':token})
+  qr=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,border=4);qr.add_data(url);qr.make(fit=True)
+  return {'token':token,'url':url,'qr_matrix':qr.get_matrix(),'expires':now+30*86400,'records':records,'agreement':agreement}
  raise a.ServiceError('Request route not found',404)
 
 def public_client_request(c,body):
+ # Serialize signing, revocation and uploads; enforce storage limits atomically.
+ if not c.in_transaction:c.execute('BEGIN IMMEDIATE')
  token=str(body.get('token',''))
  r=c.execute('SELECT * FROM tax_client_requests WHERE token_hash=? AND revoked=0 AND expires>?',(hashlib.sha256(token.encode()).hexdigest(),int(time.time()))).fetchone()
  if not r:raise a.ServiceError('Upload link expired or unavailable',404)
  draft=c.execute('SELECT * FROM tax_drafts WHERE id=?',(r['return_id'],)).fetchone()
  if not draft:raise a.ServiceError('Upload link unavailable',404)
- p=a.unseal(r['payload']);action=body.get('action','list')
- if action=='list':return {'year':draft['year'],'records':p['records'],'not_applicable':p['not_applicable'],'uploaded':[a.unseal(x['payload']).get('document_type') for x in c.execute('SELECT payload FROM tax_draft_documents WHERE return_id=?',(draft['id'],))]}
- if body.get('consent') is not True:raise a.ServiceError('Consent to share these records with your preparer is required')
+ p=a.unseal(r['payload']);action=body.get('action','list');signature=client_signature(c,r['token_hash'])
+ if action=='list':return {'year':draft['year'],'records':p['records'],'not_applicable':p['not_applicable'],'agreement':p.get('agreement'),'signature':signature,'requires_reissue':not bool(p.get('agreement')),'uploaded':[a.unseal(x['payload']).get('document_type') for x in c.execute('SELECT payload FROM tax_draft_documents WHERE return_id=?',(draft['id'],))]}
+ agreement=p.get('agreement')
+ if not agreement:raise a.ServiceError('Ask your preparer for a new link with a generated agreement',409)
+ if action=='sign':
+  if signature:raise a.ServiceError('Agreement is already signed; download the existing receipt',409)
+  if body.get('agreement_sha256')!=agreement['sha256']:raise a.ServiceError('Agreement changed; reload and review before signing',409)
+  name=str(body.get('signer_name','')).strip()
+  if not 2<=len(name)<=120 or not name.isprintable() or body.get('accept_terms') is not True or body.get('electronic_signature_consent') is not True or body.get('authority_confirmed') is not True:raise a.ServiceError('Enter your full name and confirm the agreement, electronic signature and signing authority')
+  signature={'signer_name':name,'signed_at':int(time.time()),'agreement_sha256':agreement['sha256'],'agreement_version':agreement['version'],'accept_terms':True,'electronic_signature_consent':True,'authority_confirmed':True,'identity_verified':False}
+  c.execute('INSERT INTO tax_client_signatures VALUES(?,?)',(r['token_hash'],a.seal(signature)))
+  c.execute('INSERT INTO tax_client_notifications VALUES(?,?,?,?,0)',(str(uuid.uuid4()),draft['owner'],draft['id'],int(time.time())))
+  a.audit(c,draft['owner'],'Client agreement signed for preparation '+draft['id'])
+  return {'ok':True,'signature':signature,'agreement':agreement}
+ if not signature or signature['agreement_sha256']!=agreement['sha256']:raise a.ServiceError('Sign the consent and service agreement before submitting records',403)
  record=body.get('document_type')
  if record not in p['records']:raise a.ServiceError('Choose a requested record')
  if action=='not-applicable':
   if record not in p['not_applicable']:p['not_applicable'].append(record)
  elif action=='upload':
-  dispatch('/api/tax-prep/document','POST',{**body,'id':draft['id']},c,{'id':draft['owner'],'role':'editor'})
+  document=dispatch('/api/tax-prep/document','POST',{**body,'id':draft['id']},c,{'id':draft['owner'],'role':'editor'})
+  stored=c.execute('SELECT payload FROM tax_draft_documents WHERE id=?',(document['id'],)).fetchone();contents=a.unseal(stored['payload'])
+  contents['client_agreement']={'request_id':r['token_hash'],'sha256':agreement['sha256'],'signed_at':signature['signed_at']}
+  c.execute('UPDATE tax_draft_documents SET payload=? WHERE id=?',(a.seal(contents),document['id']))
   p['not_applicable']=[x for x in p['not_applicable'] if x!=record]
  else:raise a.ServiceError('Invalid upload action')
- p['consent']=True
  c.execute('UPDATE tax_client_requests SET payload=? WHERE token_hash=?',(a.seal(p),r['token_hash']))
  c.execute('INSERT INTO tax_client_notifications VALUES(?,?,?,?,0)',(str(uuid.uuid4()),draft['owner'],draft['id'],int(time.time())))
  return {'ok':True}
 
 def initialize(c):
+ c.execute('CREATE TABLE IF NOT EXISTS tax_client_signatures(request_id TEXT PRIMARY KEY,payload TEXT NOT NULL)')
  c.execute('CREATE TABLE IF NOT EXISTS tax_client_requests(token_hash TEXT PRIMARY KEY,return_id TEXT NOT NULL,payload TEXT NOT NULL,expires INTEGER NOT NULL,created INTEGER NOT NULL,revoked INTEGER NOT NULL)')
  c.execute('CREATE TABLE IF NOT EXISTS tax_client_notifications(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,return_id TEXT NOT NULL,created INTEGER NOT NULL,seen INTEGER NOT NULL)')
  c.execute('CREATE TABLE IF NOT EXISTS tax_auto_reviews(return_id TEXT PRIMARY KEY REFERENCES tax_drafts(id) ON DELETE CASCADE,payload TEXT NOT NULL)')

@@ -1,0 +1,45 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true});
+ const page=await browser.newPage({viewport:{width:390,height:844}});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ try {
+  await page.goto('http://127.0.0.1:8765/');
+  await page.locator('#login input[name=email]').fill('ui@example.com');
+  await page.locator('#login input[name=password]').fill('browser-test-password-123');
+  await page.locator('#login button').click();
+  await page.locator('#content').getByRole('heading',{name:'Business overview',exact:true}).waitFor();
+  await page.evaluate(()=>show('tax_return_2026'));
+  await page.locator('#tax-new').click();
+  const form=page.locator('#client-engagement');
+  for(const [field,value] of Object.entries({client_name:'Client Fixture',client_email:'client@example.test',preparer_name:'Preparer Fixture',preparer_id:'P12345678',service_fee:'200',preparer_percentage:'25',custom_records:'Custom receipt'}))await form.locator(`[name=${field}]`).fill(value);
+  await page.locator('#client-preview').click();
+  await page.locator('#client-agreement-preview pre').waitFor();
+  assert.match(await page.locator('#client-agreement-preview').textContent(),/USD 50.00/);
+  await form.locator('button[type=submit]').click();
+  const invitation=page.locator('#client-link-result input');await invitation.waitFor();
+  const url=await invitation.inputValue();assert.match(url,/https:\/\/olamideolatayobello.com\/tax-record-upload#/);
+  assert(await page.locator('#client-link-result canvas').evaluate(el=>el.width>100));
+  const qrDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Download QR invitation',exact:true}).click();assert.equal((await qrDownload).suggestedFilename(),'tax-client-invitation.png');
+  const client=await browser.newPage({viewport:{width:390,height:844}});client.on('pageerror',e=>errors.push(e.message));
+  await client.goto(url.replace('https://olamideolatayobello.com','http://127.0.0.1:8765'));
+  await client.getByRole('button',{name:'Sign agreement & unlock uploads'}).waitFor();assert.equal(await client.locator('#client-records input[type=file]').count(),0);
+  await client.locator('[name=signer_name]').fill('Client Fixture');
+  for(const field of ['accept_terms','electronic_signature_consent','authority_confirmed'])await client.locator(`[name=${field}]`).check();
+  await client.getByRole('button',{name:'Sign agreement & unlock uploads'}).click();
+  await client.getByRole('heading',{name:'Upload requested records'}).waitFor();
+  const card=client.locator('#client-records .card').filter({has:client.getByRole('heading',{name:'Custom receipt',exact:true})});
+  await card.locator('input[type=file]').setInputFiles({name:'client.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 client test')});
+  await card.getByRole('button',{name:'Upload selected',exact:true}).click();
+  await client.getByRole('heading',{name:'Custom receipt — uploaded',exact:true}).waitFor();
+  const download=client.waitForEvent('download');await client.getByRole('button',{name:'Download signed agreement receipt'}).click();assert.equal((await download).suggestedFilename(),'signed-tax-agreement.txt');
+  await client.reload();await client.getByRole('heading',{name:'Upload requested records'}).waitFor();
+  await page.reload();await page.evaluate(()=>show('tax_return_2026'));await page.locator('[data-tax-open]').first().click();
+  await page.locator('#client-agreement-history').getByText(/Signed/).waitFor();
+  const docs=await page.evaluate(async()=>{const r=await api('tax-prep/returns');return await api('tax-prep/open',{id:r[0].id})});assert(docs.documents.some(x=>x.name==='client.pdf'));
+  await page.locator('#client-revoke').click();await page.getByText('Invitation revoked',{exact:true}).waitFor();
+  const blocked=await client.request.post('http://127.0.0.1:8765/api/tax-record-upload',{data:Object.fromEntries(new URLSearchParams(new URL(url).hash.slice(1)))});assert.equal(blocked.status(),404);
+  assert.deepEqual(errors,[]);console.log('Client agreement, QR invitation, signature gate, upload, persistence and revocation: passed');
+ } finally {await browser.close()}
+})().catch(e=>{console.error(e);process.exit(1)});

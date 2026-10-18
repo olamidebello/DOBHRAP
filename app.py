@@ -290,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
     c=stack.enter_context(tenant_connect(tenant_id))
     analyst_result=tax_analyst.dispatch(path,self.command,body,c,u)
     if analyst_result is not None:c.commit();self.reply(200,analyst_result);return
-    tax_result=tax_preparation.dispatch(path,self.command,body,c,u)
+    tax_result=tax_preparation.dispatch(path,self.command,{**body,'_tenant_id':tenant_id},c,u)
     if tax_result is not None:c.commit();self.reply(200,tax_result);return
     if path=='/api/financial-statements' and self.command=='GET':self.reply(200,financial_statements(c));return
     if path=='/api/dashboard' and self.command=='GET':self.reply(200,dashboard(c,u['role']));return

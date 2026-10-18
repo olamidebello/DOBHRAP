@@ -112,15 +112,16 @@ class TaxPreparationTests(unittest.TestCase):
 
 class ClientRecordRequestTests(TaxPreparationTests):
  def test_client_upload_notification_and_revocation(self):
-  d=self.create();r=self.call('client-request',{'id':d['id'],'client_name':'Client Example','client_email':'client@example.test','custom_records':['Custom receipt']})
+  d=self.create();r=self.call('client-request',{'id':d['id'],'client_name':'Client Example','client_email':'client@example.test','custom_records':['Custom receipt'],'preparer_name':'Preparer Example','preparer_id':'P12345678','preparer_percentage':'25.00','service_fee':'200.00'})
   with app.connect() as c:
    self.assertNotIn(r['token'],c.execute('SELECT token_hash FROM tax_client_requests').fetchone()[0])
    self.assertNotIn('client@example.test',c.execute('SELECT payload FROM tax_client_requests').fetchone()[0])
    result=t.public_client_request(c,{'token':r['token']});self.assertIn('Custom receipt',result['records'])
    with self.assertRaises(a.ServiceError):t.public_client_request(c,{'token':r['token'],'action':'upload','document_type':'Custom receipt'})
+   t.public_client_request(c,{'token':r['token'],'action':'sign','agreement_sha256':r['agreement']['sha256'],'signer_name':'Client Example','accept_terms':True,'electronic_signature_consent':True,'authority_confirmed':True})
    t.public_client_request(c,{'token':r['token'],'action':'upload','consent':True,'document_type':'Custom receipt','name':'receipt.pdf','type':'application/pdf','base64':base64.b64encode(b'%PDF-1.4 fixture').decode()})
   self.assertEqual(len(self.call('open',{'id':d['id']})['documents']),1)
-  self.assertEqual(len(self.call('client-notifications')),1)
+  self.assertEqual(len(self.call('client-notifications')),2)
   self.assertEqual(self.call('client-notifications',user={'id':2,'role':'admin'}),[])
   self.call('client-revoke',{'id':d['id']})
   with app.connect() as c:
@@ -129,3 +130,45 @@ class ClientRecordRequestTests(TaxPreparationTests):
   d=self.create()
   for route in ('client-request','client-revoke'):
    with self.assertRaises(a.ServiceError):self.call(route,{'id':d['id'],'client_name':'Other','client_email':'other@example.test'},user={'id':2,'role':'admin'})
+
+ def engagement(self,draft,**options):
+  return self.call('client-request',{'id':draft['id'],'client_name':'Client Example','client_email':'client@example.test','preparer_name':'Preparer Example','preparer_id':'P12345678','preparer_percentage':'25','service_fee':'200',**options})
+ def sign(self,c,r,**options):
+  return t.public_client_request(c,{'token':r['token'],'action':'sign','agreement_sha256':r['agreement']['sha256'],'signer_name':'Client Example','accept_terms':True,'electronic_signature_consent':True,'authority_confirmed':True,**options})
+ def test_agreement_signed_before_upload_and_retained_after_reissue(self):
+  d=self.create();r=self.engagement(d)
+  self.assertIn('USD 50.00',r['agreement']['text'])
+  with app.connect() as c:
+   for action in ('upload','not-applicable'):
+    with self.assertRaises(a.ServiceError) as err:t.public_client_request(c,{'token':r['token'],'action':action,'document_type':t.DEFAULT_RECORDS[0],'consent':True})
+    self.assertEqual(err.exception.status,403)
+   for overrides in ({'agreement_sha256':'tampered'},{'accept_terms':False},{'electronic_signature_consent':False},{'authority_confirmed':False},{'signer_name':''}):
+    with self.assertRaises(a.ServiceError):self.sign(c,r,**overrides)
+   signed=self.sign(c,r)
+   with self.assertRaises(a.ServiceError):self.sign(c,r)
+   t.public_client_request(c,{'token':r['token'],'action':'not-applicable','document_type':t.DEFAULT_RECORDS[0]})
+   receipt=c.execute('SELECT payload FROM tax_client_signatures').fetchone()[0];self.assertNotIn('Client Example',receipt)
+   self.assertEqual(signed['signature']['agreement_sha256'],r['agreement']['sha256'])
+  self.engagement(d,service_fee='250')
+  rows=self.call('client-status',{'id':d['id']});self.assertTrue(rows[1]['revoked']);self.assertIsNotNone(rows[1]['signature']);self.assertIsNone(rows[0]['signature'])
+  with app.connect() as c:
+   with self.assertRaises(a.ServiceError):t.public_client_request(c,{'token':r['token']})
+ def test_preparer_validation_preview_and_qr(self):
+  d=self.create()
+  for fields in ({'preparer_id':'bad'},{'preparer_name':''},{'preparer_percentage':'NaN'},{'preparer_percentage':'101'},{'preparer_percentage':'1.001'},{'service_fee':'-1'},{'service_fee':'Infinity'}):
+   with self.assertRaises(a.ServiceError):self.engagement(d,**fields)
+  before=self.call('client-status',{'id':d['id']});self.assertEqual(before,[])
+  r=self.engagement(d,_tenant_id=4)
+  self.assertIn('tenant_id=4',r['url']);self.assertIn(r['token'],r['url']);self.assertTrue(all(len(row)==len(r['qr_matrix']) for row in r['qr_matrix']))
+  import qrcode
+  qr=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,border=4);qr.add_data(r['url']);qr.make(fit=True);self.assertEqual(qr.get_matrix(),r['qr_matrix'])
+ def test_legacy_unsigned_links_require_reissue_and_expiration_blocks_signing(self):
+  d=self.create();r=self.engagement(d)
+  with app.connect() as c:
+   row=c.execute('SELECT * FROM tax_client_requests').fetchone();payload=a.unseal(row['payload']);payload.pop('agreement');c.execute('UPDATE tax_client_requests SET payload=?',(a.seal(payload),))
+   self.assertTrue(t.public_client_request(c,{'token':r['token']})['requires_reissue'])
+   with self.assertRaises(a.ServiceError):self.sign(c,r)
+  r=self.engagement(d)
+  with app.connect() as c:
+   c.execute('UPDATE tax_client_requests SET expires=0')
+   with self.assertRaises(a.ServiceError):self.sign(c,r)
