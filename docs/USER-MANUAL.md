@@ -153,7 +153,7 @@ In Tax analyst or a preparation's Documents and import review slide, select mult
 Tax analyst can analyze uploaded files when configured and the user explicitly consents. Direct uploads to preparation store documents and their classifications privately; they do not automatically extract figures. Choose Tax analyst for extraction and review/approve its results before compilation.
 
 ## Prepare for a client: agreement, invitation and uploads
-Create a separate Tax returns draft for each client. Open **Client record request & agreement**, enter the client and preparer details, PTIN, agreed USD service fee and the preparer's percentage share of that fee, then add custom requested records. The percentage is a share of the agreed service fee, not a share of any refund or tax savings. PTIN entries are self-reported, not verified by the platform.
+Create a separate Tax returns draft for each client. Open **Client record request & agreement**, enter the client and preparer details, optional PTIN, agreed USD service fee and the preparer's percentage share of that fee, then add custom requested records. The percentage is a share of the agreed service fee, not a share of any refund or tax savings. PTIN entries are self-reported, not verified by the platform.
 
 Choose **Preview generated agreement** to review or download the engagement. **Create invitation URL & QR** saves its terms and generates a private link and downloadable PNG QR code. Copy the link or use your device's share sheet to send it privately. Save the URL or QR before leaving; a replacement invalidates the previous invitation. Invitations expire after 30 days and can be revoked.
 

@@ -172,3 +172,9 @@ class ClientRecordRequestTests(TaxPreparationTests):
   with app.connect() as c:
    c.execute('UPDATE tax_client_requests SET expires=0')
    with self.assertRaises(a.ServiceError):self.sign(c,r)
+
+ def test_optional_ptin(self):
+  r=self.engagement(self.create(),preparer_id='')
+  self.assertIn('Preparer PTIN: Not provided',r['agreement']['text'])
+  terms=t.preparer_terms({'preparer_name':'Example Preparer','service_fee':'200','preparer_percentage':'25'})
+  self.assertEqual(terms['ptin'],'')

@@ -56,7 +56,7 @@ AGREEMENT_VERSION='2026-10-18.1'
 def preparer_terms(body):
  name=str(body.get('preparer_name','')).strip();ptin=str(body.get('preparer_id','')).strip().upper()
  if not 2<=len(name)<=120 or not name.isprintable():raise a.ServiceError('Enter the preparer full name')
- if not re.fullmatch(r'P[0-9]{8}',ptin):raise a.ServiceError('Enter a PTIN in P12345678 format; the platform does not verify IRS registration')
+ if ptin and not re.fullmatch(r'P[0-9]{8}',ptin):raise a.ServiceError('Enter a PTIN in P12345678 format; the platform does not verify IRS registration')
  try:
   percent=Decimal(str(body.get('preparer_percentage','')));fee=Decimal(str(body.get('service_fee','')))
   if not percent.is_finite() or not fee.is_finite() or not 0<=percent<=100 or not 0<=fee<=1000000 or percent!=percent.quantize(Decimal('.01')) or fee!=fee.quantize(Decimal('.01')):raise ValueError()
@@ -65,7 +65,7 @@ def preparer_terms(body):
 
 def generate_client_agreement(name,email,year,terms):
  text=(f"TAX PREPARATION ENGAGEMENT AND RECORD SHARING AGREEMENT\nVersion: {AGREEMENT_VERSION}\n"
-       f"Tax year: {year}\nClient: {name} ({email})\nPreparer: {terms['name']}\nPreparer PTIN: {terms['ptin']} (self-reported; not verified by this platform)\n\n"
+       f"Tax year: {year}\nClient: {name} ({email})\nPreparer: {terms['name']}\nPreparer PTIN: {terms['ptin'] or 'Not provided'} (optional; self-reported when supplied; not verified by this platform)\n\n"
        f"SERVICE AND FEE\nThe agreed preparation service fee is USD {terms['service_fee_usd']}. The preparer's allocation is {terms['percentage']}% of that service fee (USD {terms['preparer_share_usd']}). This percentage is not based on the refund, tax savings, income, or tax liability. No payment is collected or refund redirected by this agreement. Any additional fee or changed scope requires a new agreement before acceptance.\n\n"
        "SCOPE AND RESPONSIBILITIES\nI engage the named preparer to review the records I submit and assist with preparation for the stated tax year. I will provide complete and accurate records, identify missing information, and review the proposed return before authorizing any filing. The preparer is responsible for their professional qualifications and work. No refund amount or tax outcome is guaranteed. This platform currently provides intake and preparation worksheets; a complete validated return and authorized filing provider are required for filing.\n\n"
        "RECORD SHARING CONSENT\nI authorize storage of the records I choose to upload in this platform and access by the named preparer for this engagement. I will only submit records I am entitled to share, including any necessary spouse or dependent permissions. This agreement does not authorize advertising, sale of records, unrelated disclosures, or sending documents to an AI provider. Separate applicable consent is required for those uses. I may stop further uploads and contact the preparer to end the engagement or request return of my records; records already provided may remain subject to applicable retention duties.\n\n"

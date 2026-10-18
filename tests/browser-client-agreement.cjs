@@ -13,7 +13,7 @@ const assert=require('node:assert/strict');
   await page.evaluate(()=>show('tax_return_2026'));
   await page.locator('#tax-new').click();
   const form=page.locator('#client-engagement');
-  for(const [field,value] of Object.entries({client_name:'Client Fixture',client_email:'client@example.test',preparer_name:'Preparer Fixture',preparer_id:'P12345678',service_fee:'200',preparer_percentage:'25',custom_records:'Custom receipt'}))await form.locator(`[name=${field}]`).fill(value);
+  for(const [field,value] of Object.entries({client_name:'Client Fixture',client_email:'client@example.test',preparer_name:'Preparer Fixture',service_fee:'200',preparer_percentage:'25',custom_records:'Custom receipt'}))await form.locator(`[name=${field}]`).fill(value);
   await page.locator('#client-preview').click();
   await page.locator('#client-agreement-preview pre').waitFor();
   assert.match(await page.locator('#client-agreement-preview').textContent(),/USD 50.00/);
