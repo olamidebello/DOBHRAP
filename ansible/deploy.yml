@@ -436,6 +436,27 @@
       register: local_tls_identity
       changed_when: false
       failed_when: local_tls_identity.rc != 0 or 'oob-business-suite' not in local_tls_identity.stdout
+    - name: Verify database-backed startup and anonymous session over local HTTPS
+      ansible.builtin.command:
+        argv: [curl, --silent, --show-error, --noproxy, '*', --resolve, "{{ domain }}:443:127.0.0.1", --write-out, '\n%{http_code}', "https://{{ domain }}{{ item.path }}"]
+      loop:
+        - {path: /api/setup/status, status: '200', field: required}
+        - {path: /api/me, status: '401', field: error}
+      register: startup_probe
+      changed_when: false
+      failed_when: >-
+        startup_probe.rc != 0 or
+        startup_probe.stdout_lines[-1] != item.status or
+        item.field not in (startup_probe.stdout_lines[:-1] | join('\n') | from_json)
+    - name: Verify public database-backed startup API
+      ansible.builtin.uri:
+        url: "https://{{ domain }}/api/setup/status"
+        status_code: 200
+        return_content: true
+      register: public_startup
+      retries: 3
+      delay: 2
+      until: public_startup.status == 200 and public_startup.json.required is defined
     - name: Show current domain address resolution for routing diagnosis
       ansible.builtin.command:
         argv: [getent, ahosts, "{{ domain }}"]
