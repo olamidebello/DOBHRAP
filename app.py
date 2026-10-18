@@ -12,6 +12,7 @@ import tax_preparation
 import tax_analyst
 import tax_services
 import coupons
+import attendance
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 MOBILE_CACHE={'expires':0,'result':None}
@@ -54,6 +55,7 @@ BUSINESS_SCHEMA=' CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,modu
 def initialize_business(c):
  c.executescript(BUSINESS_SCHEMA)
  advanced.initialize(c)
+ attendance.initialize(c)
  tax_preparation.initialize(c)
  tax_analyst.initialize(c)
  for a in [('1000','Cash','asset'),('1100','Accounts receivable','asset'),('2000','Accounts payable','liability'),('3000','Equity','equity'),('4000','Sales','income'),('5000','Operating expense','expense'),('5100','Wages','expense')]: c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)',a)
@@ -90,6 +92,7 @@ def init():
  with connect() as c:
   c.executescript("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE,salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS setup_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tenants(id INTEGER PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',created TEXT DEFAULT CURRENT_TIMESTAMP);")
   tax_services.initialize(c)
+  attendance.initialize_platform(c)
   if 'tenant_id' not in [row[1] for row in c.execute('PRAGMA table_info(users)')]:c.execute('ALTER TABLE users ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1')
   c.execute("INSERT OR IGNORE INTO tenants(id,name) VALUES(1,'Platform workspace')")
   c.execute("CREATE TABLE IF NOT EXISTS platform_jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,creator INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'queued',created TEXT DEFAULT CURRENT_TIMESTAMP,finished TEXT,summary TEXT)")
@@ -178,11 +181,11 @@ class Handler(BaseHTTPRequestHandler):
  def handle_request(self):
   try:
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload'):
+   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/attendance.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -208,6 +211,16 @@ class Handler(BaseHTTPRequestHandler):
     if not isinstance(body,dict):raise ValueError('Expected a JSON object')
    with ExitStack() as stack:
     c=stack.enter_context(connect())
+    if path=='/api/employee-clock' and self.command=='POST':
+     tid=int(body.get('tenant_id',0));tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tid,)).fetchone()
+     if not tenant or tenant['status']!='active' or tenant['service_mode']=='tax_only':raise advanced.ServiceError('Employee portal unavailable',403)
+     private=stack.enter_context(tenant_connect(tid));cookies=SimpleCookie(self.headers.get('Cookie',''));token=cookies['employee_session'].value if 'employee_session' in cookies else ''
+     enabled=bool(c.execute('SELECT enabled FROM clock_platform WHERE id=1').fetchone()[0])
+     result=attendance.employee(private,{**body,'_employee_header':self.headers.get('X-Employee-Request')},token,self.headers.get('X-Employee-CSRF',''),hashlib.sha256(self.client_address[0].encode()).hexdigest(),enabled)
+     private.commit();cookie=None
+     if '_cookie' in result:
+      value=result.pop('_cookie');cookie='employee_session='+value+'; HttpOnly; SameSite=Strict; Path=/'+('; Max-Age=28800' if value else '; Max-Age=0')+('; Secure' if os.environ.get('DOBHRAP_SECURE_COOKIE')=='1' else '')
+     self.reply(200,result,cookie);return
     if path=='/api/tax-record-upload' and self.command=='POST':
      tid=int(body.get('tenant_id',0));tenant=c.execute('SELECT status FROM tenants WHERE id=?',(tid,)).fetchone()
      if not tenant or tenant['status']!='active':raise advanced.ServiceError('Upload link unavailable',404)
@@ -237,6 +250,12 @@ class Handler(BaseHTTPRequestHandler):
     if intl_result is not None:c.commit();self.reply(200,intl_result);return
     settings_result=provider_settings.dispatch(path,self.command,body,c,u)
     if settings_result is not None:c.commit();self.reply(200,settings_result);return
+    if path=='/api/platform/attendance':
+     if u['role']!='super_admin':raise advanced.ServiceError('Super administrator required',403)
+     if self.command=='POST':
+      if type(body.get('enabled')) is not bool:raise advanced.ServiceError('Choose platform attendance status')
+      c.execute('UPDATE clock_platform SET enabled=? WHERE id=1',(int(body['enabled']),));advanced.audit(c,u['id'],'Platform attendance status changed');c.commit()
+     self.reply(200,{'enabled':bool(c.execute('SELECT enabled FROM clock_platform WHERE id=1').fetchone()[0]),'workspaces':[dict(r) for r in c.execute('SELECT id,name,status,service_mode FROM tenants ORDER BY id')]});return
     if path=='/api/platform/watchdog':
      if self.command!='GET':raise advanced.ServiceError('Read-only endpoint',405)
      self.reply(200,watchdog_report(u['role']));return
@@ -288,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
      if tenant['service_mode']=='tax_only' and path=='/api/market/products' and self.command=='GET':result=[p for p in result if __import__('re').fullmatch(r'tax_(preparation|amendment)_\d{4}',p['service_code'])]
      c.commit();self.reply(200,result);return
     c=stack.enter_context(tenant_connect(tenant_id))
+    attendance_result=attendance.admin(path,self.command,body,c,u,tenant_id)
+    if attendance_result is not None:c.commit();self.reply(200,attendance_result);return
     analyst_result=tax_analyst.dispatch(path,self.command,body,c,u)
     if analyst_result is not None:c.commit();self.reply(200,analyst_result);return
     tax_result=tax_preparation.dispatch(path,self.command,{**body,'_tenant_id':tenant_id},c,u)

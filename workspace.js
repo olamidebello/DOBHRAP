@@ -3,24 +3,24 @@ async function safeRun(fn){try{return await fn()}catch(error){message(error.mess
 let currentUserId=0,currentTenantId=1,pageTrail=[],taxOnlyAccount=false;
 const navGroups=[
  ['Overview',['dashboard','capabilities']],
- ['Platform',['super_admin','tenants','watchdog','deployment','provider_keys','coupons']],
+ ['Platform',['platform_attendance','super_admin','tenants','watchdog','deployment','provider_keys','coupons']],
  ['Marketplace',['marketplace','market_orders','market_services']],
  ['Commerce administration',['commerce_admin','market_admin','subscription_plans','subscriptions_admin','payment_gateways','store_admin']],
  ['Sales & customers',['customers','products','invoices','projects']],
  ['Purchases & accounting',['vendors','bills','expenses','journals','reports','financial_statements']],
- ['People & payroll',['employees','time','leave','recruiting','benefits','performance','payroll','payroll_processing']],
+ ['People & payroll',['attendance','employees','time','leave','recruiting','benefits','performance','payroll','payroll_processing']],
  ['Tax',['tax_preparation','tax_services']],
  ['Banking & tax',['bank_review','bank_connections','tax_returns','tax_documents','tax_income','tax_deductions','tax_calculator','tax_organizer','efile']],
  ['Automation',['tasks','recurring','approvals','jobs']],
  ['Administration',['users','integrations','locale_settings','user_manual','support_center','downloads','help']]
 ];
-const navLabels={commerce_admin:'Commerce dashboard',subscription_plans:'Subscription plans',subscriptions_admin:'Subscription management',payment_gateways:'Payment gateways',store_admin:'Store settings',coupons:'Coupon management',tax_amendments:'Amended tax preparation',tax_services:'Tax services & payment',tax_analyst:'Tax analyst',tax_preparation:'Tax preparation',tax_return_2026:'Tax returns — current & prior years',locale_settings:'Language & currency',provider_keys:'Provider provisioning & keys',user_manual:'User manual',support_center:'Support center & tickets',marketplace:'Service marketplace',market_orders:'Marketplace orders',market_services:'Purchased services',market_admin:'Marketplace administration',dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',watchdog:'Watchdog events & reports',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
+const navLabels={attendance:"Employee clock & payroll statements",platform_attendance:"Workforce platform controls",commerce_admin:'Commerce dashboard',subscription_plans:'Subscription plans',subscriptions_admin:'Subscription management',payment_gateways:'Payment gateways',store_admin:'Store settings',coupons:'Coupon management',tax_amendments:'Amended tax preparation',tax_services:'Tax services & payment',tax_analyst:'Tax analyst',tax_preparation:'Tax preparation',tax_return_2026:'Tax returns — current & prior years',locale_settings:'Language & currency',provider_keys:'Provider provisioning & keys',user_manual:'User manual',support_center:'Support center & tickets',marketplace:'Service marketplace',market_orders:'Marketplace orders',market_services:'Purchased services',market_admin:'Marketplace administration',dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',watchdog:'Watchdog events & reports',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
 function pageLabel(page){return t(navLabels[page]||title(page))}
 function isAdmin(){return ['admin','super_admin'].includes(userRole)}
 function availablePage(page){
  if(taxOnlyAccount)return ['tax_amendments','tax_preparation','tax_return_2026','tax_analyst','tax_services','marketplace','market_orders','market_services','locale_settings','support_center','user_manual'].includes(page);
- if(['super_admin','tenants','watchdog','deployment','market_admin','provider_keys','coupons','commerce_admin','subscription_plans','subscriptions_admin','payment_gateways','store_admin'].includes(page))return userRole==='super_admin';
- if(['users','integrations','bank_connections','tax_calculator','payroll_processing','efile','approvals','jobs','recurring'].includes(page))return isAdmin();
+ if(['platform_attendance','super_admin','tenants','watchdog','deployment','market_admin','provider_keys','coupons','commerce_admin','subscription_plans','subscriptions_admin','payment_gateways','store_admin'].includes(page))return userRole==='super_admin';
+ if(['attendance','users','integrations','bank_connections','tax_calculator','payroll_processing','efile','approvals','jobs','recurring'].includes(page))return isAdmin();
  if(page==='payroll'&&userRole==='viewer')return false;return !!modules[page]||['tax_amendments','tax_services','tax_analyst','tax_preparation','tax_return_2026','locale_settings','user_manual','support_center','marketplace','market_orders','market_services','dashboard','journals','reports','financial_statements','tax_organizer','capabilities','downloads','payroll','help'].includes(page);
 }
 function shortcuts(){try{return JSON.parse(localStorage.getItem(`oob-shortcuts-${currentUserId}-${currentTenantId}`)||'[]').filter(availablePage)}catch{return []}}
