@@ -296,6 +296,9 @@ class Handler(BaseHTTPRequestHandler):
     else:self.reply(404,{'error':'Not found'}); return
     if self.command=='POST': c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],path+' '+json.dumps(result)))
     self.reply(200,result)
+  except sqlite3.OperationalError:
+   self.log_error('Database operation failed; check database availability, permissions and migrations')
+   self.reply(503,{'error':'The workspace database is temporarily unavailable. Please try again shortly.'})
   except advanced.ServiceError as e:self.reply(e.status,{'error':str(e)})
   except (ValueError,KeyError,TypeError,sqlite3.IntegrityError) as e:self.reply(400,{'error':str(e)})
 if __name__=='__main__':
