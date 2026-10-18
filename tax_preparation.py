@@ -74,7 +74,7 @@ def generate_client_agreement(name,email,year,terms):
  return {'version':AGREEMENT_VERSION,'text':text,'sha256':hashlib.sha256(text.encode()).hexdigest()}
 
 def client_request_view(r,p,signature=None):
- return {'request_id':r['token_hash'],'created':r['created'],'expires':r['expires'],'revoked':bool(r['revoked']),'client_name':p['name'],'client_email':p['email'],'records':p['records'],'preparer':p.get('preparer'),'agreement':p.get('agreement'),'signature':signature,'requires_reissue':not bool(p.get('agreement'))}
+ return {'request_id':r['token_hash'],'created':r['created'],'expires':r['expires'],'revoked':bool(r['revoked']),'client_name':p['name'],'client_email':p['email'],'records':p['records'],'record_descriptions':p.get('record_descriptions',{}),'preparer':p.get('preparer'),'agreement':p.get('agreement'),'signature':signature,'requires_reissue':not bool(p.get('agreement'))}
 
 def client_signature(c,key):
  row=c.execute('SELECT payload FROM tax_client_signatures WHERE request_id=?',(key,)).fetchone()
@@ -96,13 +96,23 @@ def client_requests(c,route,method,body,user):
   name=str(body.get('client_name','')).strip();email=str(body.get('client_email','')).strip().lower()
   if not 1<=len(name)<=120 or not name.isprintable() or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254:raise a.ServiceError('Enter client name and email')
   custom=body.get('custom_records',[])
-  if not isinstance(custom,list) or len(custom)>20 or any(not isinstance(x,str) or not x.strip() or len(x)>100 or not x.isprintable() for x in custom):raise a.ServiceError('Enter up to twenty custom record names of up to 100 characters')
+  if not isinstance(custom,list) or len(custom)>20:raise a.ServiceError('Enter up to twenty custom document requests')
+  labels=[];descriptions={};seen={x.casefold() for x in DEFAULT_RECORDS}
+  for item in custom:
+   if isinstance(item,str):label=item.strip();description=''
+   elif isinstance(item,dict):label=item.get('name');description=item.get('description','')
+   else:raise a.ServiceError('Each custom request needs a name and optional description')
+   if not isinstance(label,str) or not label.strip() or len(label)>100 or not label.isprintable():raise a.ServiceError('Enter a custom request name of up to 100 printable characters')
+   if not isinstance(description,str) or len(description)>1000 or any(not ch.isprintable() and ch not in '\n\t' for ch in description):raise a.ServiceError('Descriptions must be plain text of up to 1000 characters')
+   label=label.strip()
+   if label.casefold() in seen:raise a.ServiceError('Custom request names must be unique and different from basic records')
+   seen.add(label.casefold());labels.append(label);descriptions[label]=description.strip()
   terms=preparer_terms(body);agreement=generate_client_agreement(name,email,row['year'],terms)
   if route=='client-preview':return {'agreement':agreement,'preparer':terms}
   import secrets
-  token=secrets.token_urlsafe(32);now=int(time.time());records=list(dict.fromkeys(DEFAULT_RECORDS+[x.strip() for x in custom]))
+  token=secrets.token_urlsafe(32);now=int(time.time());records=list(dict.fromkeys(DEFAULT_RECORDS+labels))
   c.execute('UPDATE tax_client_requests SET revoked=1 WHERE return_id=?',(row['id'],))
-  c.execute('INSERT INTO tax_client_requests VALUES(?,?,?,?,?,0)',(hashlib.sha256(token.encode()).hexdigest(),row['id'],a.seal({'name':name,'email':email,'records':records,'not_applicable':[],'preparer':terms,'agreement':agreement}),now+30*86400,now))
+  c.execute('INSERT INTO tax_client_requests VALUES(?,?,?,?,?,0)',(hashlib.sha256(token.encode()).hexdigest(),row['id'],a.seal({'name':name,'email':email,'records':records,'record_descriptions':descriptions,'not_applicable':[],'preparer':terms,'agreement':agreement}),now+30*86400,now))
   import qrcode
   from urllib.parse import urlencode
   tid=int(body.get('_tenant_id',1))
@@ -120,7 +130,7 @@ def public_client_request(c,body):
  draft=c.execute('SELECT * FROM tax_drafts WHERE id=?',(r['return_id'],)).fetchone()
  if not draft:raise a.ServiceError('Upload link unavailable',404)
  p=a.unseal(r['payload']);action=body.get('action','list');signature=client_signature(c,r['token_hash'])
- if action=='list':return {'year':draft['year'],'records':p['records'],'not_applicable':p['not_applicable'],'agreement':p.get('agreement'),'signature':signature,'requires_reissue':not bool(p.get('agreement')),'uploaded':[a.unseal(x['payload']).get('document_type') for x in c.execute('SELECT payload FROM tax_draft_documents WHERE return_id=?',(draft['id'],))]}
+ if action=='list':return {'year':draft['year'],'records':p['records'],'record_descriptions':p.get('record_descriptions',{}),'not_applicable':p['not_applicable'],'agreement':p.get('agreement'),'signature':signature,'requires_reissue':not bool(p.get('agreement')),'uploaded':[a.unseal(x['payload']).get('document_type') for x in c.execute('SELECT payload FROM tax_draft_documents WHERE return_id=?',(draft['id'],))]}
  agreement=p.get('agreement')
  if not agreement:raise a.ServiceError('Ask your preparer for a new link with a generated agreement',409)
  if action=='sign':
@@ -141,6 +151,7 @@ def public_client_request(c,body):
  elif action=='upload':
   document=dispatch('/api/tax-prep/document','POST',{**body,'id':draft['id']},c,{'id':draft['owner'],'role':'editor'})
   stored=c.execute('SELECT payload FROM tax_draft_documents WHERE id=?',(document['id'],)).fetchone();contents=a.unseal(stored['payload'])
+  contents['request_description']=p.get('record_descriptions',{}).get(record,'')
   contents['client_agreement']={'request_id':r['token_hash'],'sha256':agreement['sha256'],'signed_at':signature['signed_at']}
   c.execute('UPDATE tax_draft_documents SET payload=? WHERE id=?',(a.seal(contents),document['id']))
   p['not_applicable']=[x for x in p['not_applicable'] if x!=record]

@@ -178,3 +178,14 @@ class ClientRecordRequestTests(TaxPreparationTests):
   self.assertIn('Preparer PTIN: Not provided',r['agreement']['text'])
   terms=t.preparer_terms({'preparer_name':'Example Preparer','service_fee':'200','preparer_percentage':'25'})
   self.assertEqual(terms['ptin'],'')
+
+ def test_custom_document_description_persistence_and_validation(self):
+  d=self.create();r=self.engagement(d,custom_records=[{'name':'Property statement','description':'Upload pages 1 and 2.\nInclude the tax year.'}])
+  with app.connect() as c:
+   data=t.public_client_request(c,{'token':r['token']});self.assertIn('Property statement',data['records']);self.assertIn('pages 1 and 2',data['record_descriptions']['Property statement'])
+   self.sign(c,r)
+   t.public_client_request(c,{'token':r['token'],'action':'upload','document_type':'Property statement','name':'statement.pdf','type':'application/pdf','base64':base64.b64encode(b'%PDF-1.4 test').decode()})
+   doc=a.unseal(c.execute('SELECT payload FROM tax_draft_documents WHERE return_id=?',(d['id'],)).fetchone()[0]);self.assertIn('pages 1 and 2',doc['request_description'])
+  self.assertIn('pages 1 and 2',self.call('client-status',{'id':d['id']})[0]['record_descriptions']['Property statement'])
+  for custom in ([{'name':'','description':'Missing name'}],[{'name':'A','description':'x'*1001}],[{'name':'A','description':5}],[{'name':'A'},{'name':'a'}],[t.DEFAULT_RECORDS[0]],[{'name':'A'}]*21):
+   with self.assertRaises(a.ServiceError):self.engagement(d,custom_records=custom)
