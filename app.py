@@ -112,6 +112,25 @@ def init():
     if len(token)<32: raise RuntimeError('Configure DOBHRAP_SETUP_TOKEN with at least 32 characters for browser setup')
     c.execute("INSERT OR IGNORE INTO setup_state VALUES('token_hash',?)",(hashlib.sha256(token.encode()).hexdigest(),))
 
+WATCHDOG_DB='/var/lib/oob-watchdog/events.db'
+def watchdog_report(role):
+ if role!='super_admin':raise advanced.ServiceError('Super administrator required',403)
+ path=Path(WATCHDOG_DB)
+ if not path.exists():return {'installed':False,'events':[],'summary':{},'latest':None}
+ try:
+  with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=5) as c:
+   c.row_factory=sqlite3.Row
+   events=[dict(r) for r in c.execute('SELECT * FROM watchdog_events ORDER BY id DESC LIMIT 200')]
+   for event in events:event['checks']=json.loads(event['checks'])
+   since=int(time.time())-86400
+   summary={r['action']:r['n'] for r in c.execute('SELECT action,count(*) n FROM watchdog_events WHERE checked_at>=? GROUP BY action',(since,))}
+   latest=events[0] if events else None
+   return {'installed':True,'events':events,'latest':latest,'summary':summary,
+           'stale':not latest or int(time.time())-latest['checked_at']>180,
+           'retention_days':90,'history_limit':200,'summary_window_hours':24}
+ except (sqlite3.Error,OSError,ValueError):
+  raise advanced.ServiceError('Watchdog reports are unavailable; check watchdog installation and reporting permissions',503)
+
 def post_journal(c,memo,lines):
  if len(lines)<2: raise ValueError('At least two journal lines required')
  for l in lines:
@@ -213,6 +232,9 @@ class Handler(BaseHTTPRequestHandler):
     if intl_result is not None:c.commit();self.reply(200,intl_result);return
     settings_result=provider_settings.dispatch(path,self.command,body,c,u)
     if settings_result is not None:c.commit();self.reply(200,settings_result);return
+    if path=='/api/platform/watchdog':
+     if self.command!='GET':raise advanced.ServiceError('Read-only endpoint',405)
+     self.reply(200,watchdog_report(u['role']));return
     if path in ('/api/platform/status','/api/platform/jobs'):
      if u['role']!='super_admin':self.reply(403,{'error':'Super administrator required'});return
      if self.command=='GET':

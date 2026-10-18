@@ -29,8 +29,8 @@
         path: /var/lib/oob-watchdog
         state: directory
         owner: root
-        group: root
-        mode: '0700'
+        group: dobhrap-app
+        mode: '0750'
     - name: Install trusted watchdog
       ansible.builtin.copy:
         dest: /usr/local/sbin/oob-watchdog.py
@@ -44,6 +44,8 @@
           import json
           import os
           import pathlib
+          import sqlite3
+          import grp
           import subprocess
           import time
           import urllib.error
@@ -78,6 +80,15 @@
               temporary.write_text(json.dumps(state, indent=2) + '\n')
               os.chmod(temporary, 0o600)
               temporary.replace(STATE)
+              # Separate database remains writable when the business database fails.
+              database = ROOT / 'events.db'
+              with sqlite3.connect(database, timeout=10) as c:
+                  c.execute('CREATE TABLE IF NOT EXISTS watchdog_events(id INTEGER PRIMARY KEY, checked_at INTEGER NOT NULL, action TEXT NOT NULL, failures INTEGER NOT NULL, service TEXT NOT NULL, checks TEXT NOT NULL)')
+                  c.execute('INSERT INTO watchdog_events(checked_at,action,failures,service,checks) VALUES(?,?,?,?,?)',
+                            (state['checked_at'], state['action'], state['failures'], state['service'], json.dumps(state['checks'])))
+                  c.execute('DELETE FROM watchdog_events WHERE checked_at < ?', (int(time.time()) - 90*86400,))
+              os.chown(database, 0, grp.getgrnam('dobhrap-app').gr_gid)
+              os.chmod(database, 0o640)
               print(json.dumps(state), flush=True)
 
           def main():

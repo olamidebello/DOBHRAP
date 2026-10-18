@@ -1,0 +1,4 @@
+---
+# Deploy API/GUI first, then install event collection and read-only app access.
+- import_playbook: repair-oob.yml
+- import_playbook: watchdog-oob.yml
