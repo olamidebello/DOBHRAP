@@ -49,7 +49,55 @@ STEPS=[
 ]
 STEP_MAP={x['key']:x for x in STEPS}
 
+DEFAULT_RECORDS=['Taxpayer identification and SSN / ITIN evidence','Spouse and dependent information','W-2 wage statements','1099 income statements and investment records','Business and rental income / expenses','Deductions and charitable contribution records','Education and childcare records','Health insurance / 1095-A','Estimated tax payments','Prior-year tax return']
+
+def client_requests(c,route,method,body,user):
+ if route=='client-notifications' and method=='GET':
+  return [dict(r) for r in c.execute('SELECT id,return_id,created,seen FROM tax_client_notifications WHERE owner=? ORDER BY created DESC LIMIT 100',(user['id'],))]
+ if method!='POST':raise a.ServiceError('Request route not found',404)
+ if route=='client-notification-read':
+  c.execute('UPDATE tax_client_notifications SET seen=1 WHERE id=? AND owner=?',(body.get('notification_id'),user['id']));return {'ok':True}
+ if user['role']=='viewer':raise a.ServiceError('Read-only account',403)
+ row,p=read(c,body.get('id'),user)
+ if route=='client-revoke':
+  c.execute('UPDATE tax_client_requests SET revoked=1 WHERE return_id=?',(row['id'],));return {'ok':True}
+ if route=='client-request':
+  name=str(body.get('client_name','')).strip();email=str(body.get('client_email','')).strip().lower()
+  if not 1<=len(name)<=120 or '@' not in email or len(email)>254:raise a.ServiceError('Enter client name and email')
+  custom=body.get('custom_records',[])
+  if not isinstance(custom,list) or len(custom)>20 or any(not isinstance(x,str) or not x.strip() or len(x)>100 or not x.isprintable() for x in custom):raise a.ServiceError('Enter up to twenty custom record names of up to 100 characters')
+  import secrets
+  token=secrets.token_urlsafe(32);now=int(time.time());records=list(dict.fromkeys(DEFAULT_RECORDS+[x.strip() for x in custom]))
+  c.execute('UPDATE tax_client_requests SET revoked=1 WHERE return_id=?',(row['id'],))
+  c.execute('INSERT INTO tax_client_requests VALUES(?,?,?,?,?,0)',(hashlib.sha256(token.encode()).hexdigest(),row['id'],a.seal({'name':name,'email':email,'records':records,'not_applicable':[],'consent':False}),now+30*86400,now))
+  return {'token':token,'expires':now+30*86400,'records':records}
+ raise a.ServiceError('Request route not found',404)
+
+def public_client_request(c,body):
+ token=str(body.get('token',''))
+ r=c.execute('SELECT * FROM tax_client_requests WHERE token_hash=? AND revoked=0 AND expires>?',(hashlib.sha256(token.encode()).hexdigest(),int(time.time()))).fetchone()
+ if not r:raise a.ServiceError('Upload link expired or unavailable',404)
+ draft=c.execute('SELECT * FROM tax_drafts WHERE id=?',(r['return_id'],)).fetchone()
+ if not draft:raise a.ServiceError('Upload link unavailable',404)
+ p=a.unseal(r['payload']);action=body.get('action','list')
+ if action=='list':return {'year':draft['year'],'records':p['records'],'not_applicable':p['not_applicable'],'uploaded':[a.unseal(x['payload']).get('document_type') for x in c.execute('SELECT payload FROM tax_draft_documents WHERE return_id=?',(draft['id'],))]}
+ if body.get('consent') is not True:raise a.ServiceError('Consent to share these records with your preparer is required')
+ record=body.get('document_type')
+ if record not in p['records']:raise a.ServiceError('Choose a requested record')
+ if action=='not-applicable':
+  if record not in p['not_applicable']:p['not_applicable'].append(record)
+ elif action=='upload':
+  dispatch('/api/tax-prep/document','POST',{**body,'id':draft['id']},c,{'id':draft['owner'],'role':'editor'})
+  p['not_applicable']=[x for x in p['not_applicable'] if x!=record]
+ else:raise a.ServiceError('Invalid upload action')
+ p['consent']=True
+ c.execute('UPDATE tax_client_requests SET payload=? WHERE token_hash=?',(a.seal(p),r['token_hash']))
+ c.execute('INSERT INTO tax_client_notifications VALUES(?,?,?,?,0)',(str(uuid.uuid4()),draft['owner'],draft['id'],int(time.time())))
+ return {'ok':True}
+
 def initialize(c):
+ c.execute('CREATE TABLE IF NOT EXISTS tax_client_requests(token_hash TEXT PRIMARY KEY,return_id TEXT NOT NULL,payload TEXT NOT NULL,expires INTEGER NOT NULL,created INTEGER NOT NULL,revoked INTEGER NOT NULL)')
+ c.execute('CREATE TABLE IF NOT EXISTS tax_client_notifications(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,return_id TEXT NOT NULL,created INTEGER NOT NULL,seen INTEGER NOT NULL)')
  c.execute('CREATE TABLE IF NOT EXISTS tax_auto_reviews(return_id TEXT PRIMARY KEY REFERENCES tax_drafts(id) ON DELETE CASCADE,payload TEXT NOT NULL)')
  c.execute("CREATE TABLE IF NOT EXISTS tax_suggestion_jobs(id TEXT PRIMARY KEY,return_id TEXT NOT NULL,owner INTEGER NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',requested INTEGER NOT NULL,finished INTEGER,UNIQUE(return_id,digest))")
  c.execute('CREATE TABLE IF NOT EXISTS tax_amendments(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,year INTEGER NOT NULL,payload TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,updated INTEGER NOT NULL)')
@@ -269,6 +317,7 @@ def amendments(route,method,body,c,user):
 def dispatch(path,method,body,c,user):
  if not path.startswith('/api/tax-prep/'):return None
  route=path[len('/api/tax-prep/'):]
+ if route.startswith('client-'):return client_requests(c,route,method,body,user)
  if route=='amendments' or route.startswith('amendment-'):return amendments(route,method,body,c,user)
  if route=='schema' and method=='GET':return {**year_catalog(),'year':year_catalog()['current_year'],'steps':STEPS,'sources':SOURCES,'filing_available':False}
  if route=='returns' and method=='GET':

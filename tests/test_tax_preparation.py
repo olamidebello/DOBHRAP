@@ -109,3 +109,23 @@ class TaxPreparationTests(unittest.TestCase):
   with self.assertRaises(a.ServiceError):self.call('create',{},user={'id':2,'role':'viewer'})
   with self.assertRaises(a.ServiceError):self.call('delete',{'id':d['id']})
   self.call('delete',{'id':d['id'],'confirm':'DELETE'});self.assertEqual(self.call('returns'),[])
+
+class ClientRecordRequestTests(TaxPreparationTests):
+ def test_client_upload_notification_and_revocation(self):
+  d=self.create();r=self.call('client-request',{'id':d['id'],'client_name':'Client Example','client_email':'client@example.test','custom_records':['Custom receipt']})
+  with app.connect() as c:
+   self.assertNotIn(r['token'],c.execute('SELECT token_hash FROM tax_client_requests').fetchone()[0])
+   self.assertNotIn('client@example.test',c.execute('SELECT payload FROM tax_client_requests').fetchone()[0])
+   result=t.public_client_request(c,{'token':r['token']});self.assertIn('Custom receipt',result['records'])
+   with self.assertRaises(a.ServiceError):t.public_client_request(c,{'token':r['token'],'action':'upload','document_type':'Custom receipt'})
+   t.public_client_request(c,{'token':r['token'],'action':'upload','consent':True,'document_type':'Custom receipt','name':'receipt.pdf','type':'application/pdf','base64':base64.b64encode(b'%PDF-1.4 fixture').decode()})
+  self.assertEqual(len(self.call('open',{'id':d['id']})['documents']),1)
+  self.assertEqual(len(self.call('client-notifications')),1)
+  self.assertEqual(self.call('client-notifications',user={'id':2,'role':'admin'}),[])
+  self.call('client-revoke',{'id':d['id']})
+  with app.connect() as c:
+   with self.assertRaises(a.ServiceError):t.public_client_request(c,{'token':r['token']})
+ def test_other_preparer_cannot_request_or_revoke(self):
+  d=self.create()
+  for route in ('client-request','client-revoke'):
+   with self.assertRaises(a.ServiceError):self.call(route,{'id':d['id'],'client_name':'Other','client_email':'other@example.test'},user={'id':2,'role':'admin'})

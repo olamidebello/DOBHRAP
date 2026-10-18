@@ -178,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
  def handle_request(self):
   try:
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/'):
+   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
@@ -203,11 +203,16 @@ class Handler(BaseHTTPRequestHandler):
     self.reply(200,result);return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))
-    if not 0<=size<=(3_000_000 if path in ('/api/tax-prep/document','/api/tax-analyst/upload') else 1_000_000 if path=='/api/tax-analyst/save' else 100000): self.reply(413,{'error':'Request too large'}); return
+    if not 0<=size<=(3_000_000 if path in ('/api/tax-prep/document','/api/tax-analyst/upload','/api/tax-record-upload') else 1_000_000 if path=='/api/tax-analyst/save' else 100000): self.reply(413,{'error':'Request too large'}); return
     body=json.loads(self.rfile.read(size) or b'{}')
     if not isinstance(body,dict):raise ValueError('Expected a JSON object')
    with ExitStack() as stack:
     c=stack.enter_context(connect())
+    if path=='/api/tax-record-upload' and self.command=='POST':
+     tid=int(body.get('tenant_id',0));tenant=c.execute('SELECT status FROM tenants WHERE id=?',(tid,)).fetchone()
+     if not tenant or tenant['status']!='active':raise advanced.ServiceError('Upload link unavailable',404)
+     private=stack.enter_context(tenant_connect(tid))
+     result=tax_preparation.public_client_request(private,body);private.commit();self.reply(200,result);return
     if path=='/api/support/intake' and self.command=='POST':
      result=support.intake(c,body,self.headers);c.commit();self.reply(201,result);return
     if path=='/api/setup/status' and self.command=='GET':

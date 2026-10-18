@@ -9,8 +9,12 @@ async function showTaxPreparation(page){
  if(page==='tax_preparation'){
   content.innerHTML='<section><h2>Tax preparation</h2><p>Prepare private current and prior-year worksheets through a guided, slide-by-slide interview. Resume on another device after saving. Personal tax drafts are visible only to their owner, including in shared workspaces.</p><button data-go="tax_return_2026">Tax returns — select year</button><h3>Included preparation areas</h3><p>Personal and household details, income documents, investments, business and rental intake, deductions, credits, states, payments, encrypted documents and review.</p><p class="notice">This is a preparation interview, not TurboTax, an official IRS return, a complete tax calculation or an e-file service. Business/entity routes and state taxes are intake only.</p><a href="https://www.irs.gov/forms-pubs/about-form-1040" target="_blank" rel="noopener noreferrer">IRS Form 1040 information</a></section>';goButtons();return;
  }
- function list(){
+ async function list(){
   content.innerHTML='<section><h2>Tax returns</h2><label>Tax year<select id="preparation-year">'+schema.years.map(y=>'<option '+(y===selectedYear?'selected':'')+'>'+y+'</option>').join('')+'</select></label><p>USD · Encrypted private drafts · Preparation worksheet only</p><button id="tax-new" '+(writable?'':'disabled')+'>Start selected-year preparation</button><button data-go="tax_preparation">Preparation overview</button></section><section><h3>Your saved preparations</h3>'+returns.filter(r=>r.year===selectedYear).map(r=>`<div class="card"><h3>${esc(r.name)}</h3><p>${esc(r.status)} · Slide ${r.step+1} · ${esc(localizedDate(r.updated*1000))}</p><button data-tax-open="${r.id}" ${writable?'':'disabled'}>Continue preparation</button></div>`).join('')+(!returns.length?'<p>No saved preparations yet.</p>':'')+'</section>';
+  content.insertAdjacentHTML('beforeend','<section><h3>Prepare for another person</h3><p>Create a separate preparation for each client, registered or guest. Enter their name as the return nickname. Open the preparation to request records.</p></section>');
+  const notes=await api('tax-prep/client-notifications');
+  content.insertAdjacentHTML('beforeend','<section><h3>Profile notifications</h3>'+notes.map(n=>`<p>${n.seen?'Read':'New'} client record activity · ${esc(localizedDate(n.created*1000))} <button data-note="${n.id}" data-return="${n.return_id}">Review preparation</button></p>`).join('')+'</section>');
+  content.querySelectorAll('[data-note]').forEach(b=>b.onclick=()=>safeRun(async()=>{await api('tax-prep/client-notification-read',{notification_id:b.dataset.note});await interview(await api('tax-prep/open',{id:b.dataset.return}))}));
   goButtons();document.querySelector('#preparation-year').onchange=e=>{selectedYear=Number(e.target.value);taxSelectedYear=selectedYear;list()};document.querySelector('#tax-new').onclick=()=>safeRun(async()=>{const r=await api('tax-prep/create',{year:selectedYear});await interview(r)});
   content.querySelectorAll('[data-tax-open]').forEach(b=>b.onclick=()=>safeRun(async()=>interview(await api('tax-prep/open',{id:b.dataset.taxOpen}))));
  }
@@ -22,6 +26,14 @@ async function showTaxPreparation(page){
   const money=v=>formatMoneyMinor(v,'USD');
   content.innerHTML='<div id="tax-workspace"><section><h2>'+draft.year+' Tax Return</h2><p class="notice">Private preparation worksheet — NOT FOR FILING. No completed 1040, refund guarantee, state calculation or tax transmission.</p><div class="tax-progress"><progress id="tax-progress" max="16" value="0"></progress><span id="tax-step-count"></span></div><p id="tax-save-state" role="status">Saved</p><div id="tax-step-links" class="tax-step-links"></div></section><section id="tax-slide" class="tax-slide" aria-live="polite"></section><div class="tax-actions"><button id="tax-back">Back</button><button id="tax-save">Save draft</button><button id="tax-next">Save & continue</button><button id="tax-exit">Save & exit</button></div></div>';
   const workspace=content.querySelector('#tax-workspace'),slide=workspace.querySelector('#tax-slide');
+  workspace.insertAdjacentHTML('beforeend','<section><h3>Client record request</h3><p>Share a private 30-day link with a registered or guest client. A new link replaces the previous link. Uploaded records appear in this preparation’s Documents slide for review.</p><label>Client name<input id="client-name" maxlength="120"></label><label>Client email<input id="client-email" type="email" maxlength="254"></label><label>Custom requested records (one per line)<textarea id="client-custom"></textarea></label><button id="client-link">Create record request link</button><button id="client-revoke">Revoke link</button><div id="client-link-result"></div></section>');
+  workspace.querySelector('#client-link').onclick=()=>safeRun(async()=>{
+   const r=await api('tax-prep/client-request',{id:draft.id,client_name:workspace.querySelector('#client-name').value,client_email:workspace.querySelector('#client-email').value,custom_records:workspace.querySelector('#client-custom').value.split('\n').map(x=>x.trim()).filter(Boolean)});
+   const url=location.origin+'/tax-record-upload#'+new URLSearchParams({tenant_id:currentTenantId,token:r.token});
+   const result=workspace.querySelector('#client-link-result');result.textContent='Copy and send privately: ';const input=document.createElement('input');input.readOnly=true;input.value=url;result.append(input);input.select();
+  });
+  workspace.querySelector('#client-revoke').onclick=()=>safeRun(async()=>{await api('tax-prep/client-revoke',{id:draft.id});workspace.querySelector('#client-link-result').textContent='Link revoked'});
+
   const status=message=>{const el=workspace.querySelector('#tax-save-state');if(el)el.textContent=message};
   function renderField(f,value,prefix=''){
    const name=prefix+f.key,label=esc(f.label)+(f.required?' *':'');
@@ -135,4 +147,18 @@ function taxDocumentQueue(input,container,types,defaults){
  }
  input.onchange=()=>{if(locked)return;const d=defaults();for(const file of input.files)items.push({file,type:types.includes(d.type)?d.type:types[0],custom:d.custom||'',uploaded:false});input.value='';render()};
  return {pending:()=>items.filter(r=>!r.uploaded).map(r=>({...r,source:r,document_type:r.custom.trim()||r.type})),has:()=>items.length>0,lock:value=>{locked=value;input.disabled=value;render()},mark:(entry,status,uploaded=false)=>{entry.source.status=status;entry.source.uploaded=uploaded;render()},finish:()=>{items=items.filter(r=>!r.uploaded);locked=false;input.disabled=false;render()}};
+}
+
+async function showClientRecordUpload(){
+ const params=new URLSearchParams(location.hash.slice(1));const credentials={tenant_id:Number(params.get('tenant_id')),token:params.get('token')};
+ const request=async body=>{const response=await fetch('/api/tax-record-upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...credentials,...body})});const data=await response.json();if(!response.ok)throw Error(data.error||'Upload failed');return data};
+ const render=async()=>{
+  const data=await request({});content.innerHTML='<section><h2>Tax record upload · '+data.year+'</h2><p>Your preparer requested the records below. Upload applicable records or mark a category not applicable. No account is required. Anyone with this private link can submit records; keep it private.</p><label><input type="checkbox" id="client-consent"> I authorize sharing these records with the preparer who provided this link.</label><div id="client-records"></div><p id="client-progress" role="status"></p></section>';
+  const box=content.querySelector('#client-records');
+  for(const record of data.records){const row=document.createElement('div');row.className='card';const title=document.createElement('h3');title.textContent=record+(data.uploaded.includes(record)?' — uploaded':data.not_applicable.includes(record)?' — not applicable':' — requested');row.append(title);const input=document.createElement('input');input.type='file';input.multiple=true;input.accept='application/pdf,image/png,image/jpeg';row.append(input);const upload=document.createElement('button');upload.textContent='Upload selected';const na=document.createElement('button');na.textContent='Not applicable';row.append(upload,na);box.append(row);
+   const consent=()=>{if(!content.querySelector('#client-consent').checked)throw Error('Confirm sharing consent first');return true};
+   upload.onclick=()=>safeRun(async()=>{const agreed=consent();if(!input.files.length)throw Error('Select files');upload.disabled=true;try{for(const file of input.files){if(file.size>2000000)throw Error('Maximum 2 MB per file');const bytes=new Uint8Array(await file.arrayBuffer());let raw='';for(let i=0;i<bytes.length;i+=8192)raw+=String.fromCharCode(...bytes.subarray(i,i+8192));await request({action:'upload',document_type:record,consent:agreed,name:file.name,type:file.type,base64:btoa(raw)})}await render();message('Uploaded. Your preparer has been notified.')}finally{upload.disabled=false}});
+   na.onclick=()=>safeRun(async()=>{await request({action:'not-applicable',document_type:record,consent:consent()});await render()});
+  }
+ };await render();
 }
