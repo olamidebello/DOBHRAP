@@ -1,0 +1,139 @@
+---
+# Run locally as root after pulling the repository. Safe to rerun.
+# Does not guarantee uptime: persistent application/host faults still need repair.
+- name: Preserve outage evidence before changing the dedicated application
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require local execution on the hosting server
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+        fail_msg: Run on the hosting server with -i 'dobhrap,' -c local.
+    - name: Create private diagnostic directory
+      ansible.builtin.file:
+        path: /var/log/oob-stability
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Capture recent service and gateway errors privately
+      ansible.builtin.command:
+        argv: [journalctl, -u, oob-business.service, -u, nginx.service, -n, '150', --no-pager]
+      register: stability_journal
+      changed_when: false
+      failed_when: false
+      no_log: true
+    - name: Retain latest pre-repair diagnostic snapshot
+      ansible.builtin.copy:
+        dest: /var/log/oob-stability/before-repair.log
+        content: "{{ stability_journal.stdout | default('Journal unavailable') }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+# Existing repair preserves credentials, backs up data, tests staged source,
+# selects a private port, migrates schemas and repairs this domain's nginx route.
+- import_playbook: repair-oob.yml
+
+# Uses PORT from the installed environment, checks identity/database/session,
+# records events and bounds active health-triggered restarts with a cooldown.
+- import_playbook: watchdog-oob.yml
+  vars:
+    watchdog_service: oob-business
+
+- name: Verify stable gateway routing and boot recovery
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Validate nginx before applying routing
+      ansible.builtin.command: nginx -t
+      changed_when: false
+    - name: Enable nginx after reboot
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+    - name: Ensure dedicated web recovery survives transient failures
+      ansible.builtin.file:
+        path: /etc/systemd/system/oob-business.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install persistent web recovery policy
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-business.service.d/30-stability.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          StartLimitIntervalSec=0
+          [Service]
+          Restart=on-failure
+          RestartSec=10s
+      register: stability_policy
+    - name: Clear any previous restart lockout
+      ansible.builtin.command: systemctl reset-failed oob-business.service
+      changed_when: false
+    - name: Apply web recovery policy and enable boot startup
+      ansible.builtin.systemd:
+        name: oob-business.service
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if stability_policy.changed else 'started' }}"
+    - name: Reload validated gateway routing
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+    - name: Require repeated public HTTPS application identity checks
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/api/identity
+        status_code: 200
+        validate_certs: true
+        return_content: true
+        timeout: 10
+      register: stability_probe
+      until: >-
+        stability_probe.status | default(0) == 200 and
+        (stability_probe.json | default({})).get('application', '') == 'oob-business-suite'
+      retries: 6
+      delay: 5
+      loop: [1, 2, 3]
+      loop_control:
+        pause: 5
+    - name: Check dedicated service and recovery timers
+      ansible.builtin.command:
+        argv: [systemctl, is-active, '{{ item }}']
+      loop:
+        - oob-business.service
+        - oob-business-worker.timer
+        - oob-business-backup.timer
+        - oob-watchdog.timer
+      changed_when: false
+    - name: Run database-aware health check immediately
+      ansible.builtin.systemd:
+        name: oob-watchdog.service
+        state: restarted
+    - name: Read health report
+      ansible.builtin.slurp:
+        src: /var/lib/oob-watchdog/status.json
+      register: stability_health
+    - name: Require all database-aware checks to pass
+      ansible.builtin.assert:
+        that:
+          - (stability_health.content | b64decode | from_json).checks.identity
+          - (stability_health.content | b64decode | from_json).checks.database
+          - (stability_health.content | b64decode | from_json).checks.anonymous_session
+        fail_msg: Persistent fault remains. Inspect the private service journal and watchdog report.
+    - name: Report verified stability controls
+      ansible.builtin.debug:
+        msg:
+          - 'Public HTTPS identity passed three checks; database/session checks and recovery timers passed.'
+          - 'Crash recovery retries every 10 seconds; health watchdog checks every minute with restart cooldown.'
+          - 'Private evidence: /var/log/oob-stability/before-repair.log'
+          - 'Health events: journalctl -u oob-watchdog.service; report: /var/lib/oob-watchdog/status.json'
+          - 'Persistent application, disk, memory or database faults require operator diagnosis; no financial jobs are retried.'
