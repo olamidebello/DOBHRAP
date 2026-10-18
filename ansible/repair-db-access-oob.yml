@@ -1,0 +1,122 @@
+---
+# Repairs the confirmed SQLite-open startup failure without creating a new DB.
+- name: Repair dedicated OOB database permissions and service identity
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars:
+    db_units: [oob-business, oob-business-worker, oob-business-backup, oob-business-support, oob-business-marketplace, oob-business-bank-import]
+  tasks:
+    - name: Require local execution
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Validate installed database path without disclosing secrets
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import pathlib, shlex
+            values={}
+            for line in pathlib.Path('/etc/dobhrap.env').read_text().splitlines():
+                if line.strip() and not line.lstrip().startswith('#') and '=' in line:
+                    k,v=line.split('=',1)
+                    if k.strip()=='DOBHRAP_DB':
+                        parts=shlex.split(v,comments=False)
+                        values[k.strip()]=parts[0] if len(parts)==1 else ''
+            assert values.get('DOBHRAP_DB')=='/var/lib/dobhrap/dobhrap.db', 'Unexpected DB path: inspect DOBHRAP_DB privately before repair; no replacement database created'
+            root=pathlib.Path('/var/lib/dobhrap')
+            db=root/'dobhrap.db'
+            assert db.is_file() and not db.is_symlink() and db.stat().st_size>0, 'Existing database missing, empty or symlinked; restore or locate original first'
+            assert root.resolve()==root, 'Unexpected data directory symlink'
+            assert not any(p.is_symlink() for p in root.rglob('*')), 'Inspect data symlinks before changing ownership'
+            print('Existing canonical database confirmed')
+      changed_when: false
+    - name: Validate dedicated unit ownership before changes
+      ansible.builtin.command:
+        argv: [systemctl, cat, '{{ item }}.service']
+      loop: '{{ db_units }}'
+      register: db_unit
+      changed_when: false
+      failed_when: >-
+        db_unit.rc != 0 or '/opt/dobhrap/current/' not in db_unit.stdout or
+        'EnvironmentFile=/etc/dobhrap.env' not in db_unit.stdout
+    - name: Ensure dedicated account exists
+      ansible.builtin.getent:
+        database: passwd
+        key: dobhrap-app
+    - name: Stop dedicated background timers during permission repair
+      ansible.builtin.systemd:
+        name: '{{ item }}.timer'
+        state: stopped
+      loop: '{{ db_units[1:] }}'
+    - name: Stop dedicated application processes
+      ansible.builtin.systemd:
+        name: '{{ item }}.service'
+        state: stopped
+      loop: '{{ db_units }}'
+    - name: Back up existing catalog and tenant databases before repair
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/backup.py]
+      environment:
+        DOBHRAP_DB: /var/lib/dobhrap/dobhrap.db
+        DOBHRAP_BACKUP_DIR: /var/backups/oob-db-access
+    - name: Assign persistent data to the dedicated service identity
+      ansible.builtin.file:
+        path: /var/lib/dobhrap
+        state: directory
+        owner: dobhrap-app
+        group: dobhrap-app
+        mode: 'u=rwX,g=,o='
+        recurse: true
+    - name: Create persistent unit override directories
+      ansible.builtin.file:
+        path: '/etc/systemd/system/{{ item }}.service.d'
+        state: directory
+        mode: '0755'
+      loop: '{{ db_units }}'
+    - name: Enforce consistent database identity and preflight inside systemd sandbox
+      ansible.builtin.copy:
+        dest: '/etc/systemd/system/{{ item }}.service.d/40-database-access.conf'
+        mode: '0644'
+        content: |
+          [Service]
+          User=dobhrap-app
+          Group=dobhrap-app
+          Environment=DOBHRAP_DB=/var/lib/dobhrap/dobhrap.db
+          ReadWritePaths=/var/lib/dobhrap /var/backups/dobhrap
+          ExecStartPre=/opt/dobhrap/current/venv/bin/python -c "import sqlite3; c=sqlite3.connect('file:/var/lib/dobhrap/dobhrap.db?mode=rw', uri=True, timeout=30); c.execute('BEGIN IMMEDIATE'); c.rollback(); c.close()"
+      loop: '{{ db_units }}'
+    - name: Clear web restart lockout
+      ansible.builtin.command: systemctl reset-failed oob-business.service
+      changed_when: false
+    - name: Start dedicated web service with repaired access
+      ansible.builtin.systemd:
+        name: oob-business.service
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Verify nginx routes to the recovered app on this host
+      ansible.builtin.command:
+        argv: [curl, --fail, --silent, --show-error, --max-time, '10', --noproxy, '*', --resolve, 'olamideolatayobello.com:443:127.0.0.1', https://olamideolatayobello.com/api/identity]
+      register: db_identity
+      changed_when: false
+      until: db_identity.rc == 0 and 'oob-business-suite' in db_identity.stdout
+      retries: 10
+      delay: 3
+    - name: Restore dedicated background timers
+      ansible.builtin.systemd:
+        name: '{{ item }}.timer'
+        enabled: true
+        state: started
+      loop: '{{ db_units[1:] }}'
+    - name: Verify public HTTPS database access
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/api/setup/status
+        status_code: 200
+        timeout: 10
+      register: db_public
+      failed_when: db_public.status != 200 or (db_public.json.required | default(true)) != false
+    - name: Report recovery
+      ansible.builtin.debug:
+        msg: 'Existing database access repaired; local HTTPS identity and public completed-setup checks passed. Backups: /var/backups/oob-db-access. No database was replaced.'
