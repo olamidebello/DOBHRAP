@@ -199,7 +199,29 @@
         group: "{{ service_user }}"
         recurse: true
         state: directory
+        mode: 'u=rwX,g=,o='
       loop: [/var/lib/dobhrap, /var/backups/dobhrap]
+    - name: Verify database directory and existing database as the runtime account
+      ansible.builtin.command:
+        argv:
+          - "{{ app_root }}/releases/{{ release_id }}/venv/bin/python"
+          - -c
+          - |
+            import pathlib, sqlite3, tempfile
+            root = pathlib.Path('/var/lib/dobhrap')
+            with tempfile.TemporaryFile(dir=root) as probe:
+                probe.write(b'database-access-probe')
+                probe.flush()
+            db = root / 'dobhrap.db'
+            if db.exists():
+                with sqlite3.connect(db.as_uri() + '?mode=rw', uri=True, timeout=30) as c:
+                    c.execute('SELECT name FROM sqlite_master LIMIT 1').fetchone()
+                    c.execute('BEGIN IMMEDIATE')
+                    c.rollback()
+      become_user: "{{ service_user }}"
+      vars:
+        ansible_remote_tmp: /tmp/.ansible-oob-app
+      changed_when: false
     - name: Save pre-migration database snapshot if present
       ansible.builtin.command:
         argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", "{{ app_root }}/releases/{{ release_id }}/backup.py"]
