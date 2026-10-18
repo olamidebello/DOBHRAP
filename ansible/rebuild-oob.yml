@@ -1,0 +1,5 @@
+---
+# Existing OOB installations: repair confirmed DB access, rebuild/test/deploy
+# immutable source, repair HTTPS routing, then install and verify monitoring.
+- import_playbook: repair-db-access-oob.yml
+- import_playbook: stabilize-oob.yml
