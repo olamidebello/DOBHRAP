@@ -1,0 +1,149 @@
+---
+# On the hosting server:
+# ansible-playbook -i 'dobhrap,' -c local ansible/watchdog-continuous-oob.yml
+- import_playbook: watchdog-oob.yml
+
+- name: Install continuous gateway checks and bounded recovery
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install gateway watchdog
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/oob-gateway-watchdog.py
+        owner: root
+        group: root
+        mode: '0700'
+        content: |
+          #!/usr/bin/python3
+          import fcntl
+          import json
+          import pathlib
+          import subprocess
+          import time
+
+          ROOT = pathlib.Path('/var/lib/oob-watchdog')
+          STATE = ROOT / 'gateway.json'
+          URL = 'https://olamideolatayobello.com/api/identity'
+
+          def run(args):
+              return subprocess.run(args, capture_output=True, text=True, timeout=20)
+
+          def probe(local=False):
+              args = ['curl', '--silent', '--show-error', '--fail',
+                      '--connect-timeout', '4', '--max-time', '8', '--noproxy', '*']
+              if local:
+                  args += ['--resolve', 'olamideolatayobello.com:443:127.0.0.1']
+              try:
+                  result = run(args + [URL])
+                  return result.returncode == 0 and json.loads(result.stdout).get('application') == 'oob-business-suite'
+              except (ValueError, AttributeError):
+                  return False
+
+          def main():
+              with (ROOT / 'gateway.lock').open('w') as lock:
+                  try:
+                      fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  except BlockingIOError:
+                      return
+                  try:
+                      previous = json.loads(STATE.read_text())
+                  except (OSError, ValueError):
+                      previous = {}
+                  local = probe(True)
+                  public = probe()
+                  failures = 0 if local else int(previous.get('failures', 0)) + 1
+                  now = int(time.time())
+                  state = dict(checked_at=now, local_https=local, public_https=public,
+                               failures=failures, last_repair=int(previous.get('last_repair', 0)),
+                               action='healthy' if local and public else 'observing')
+                  if local and not public:
+                      state['action'] = 'public_dns_network_or_tls_operator_required'
+                  elif failures >= 2 and now - state['last_repair'] >= 900:
+                      # Invalid configuration is recorded; never reload it.
+                      if run(['nginx', '-t']).returncode:
+                          state['action'] = 'invalid_nginx_config_operator_required'
+                      else:
+                          state.update(last_repair=now, action='repair_pending')
+                          save(state)
+                          active = run(['systemctl', 'is-active', '--quiet', 'nginx.service']).returncode == 0
+                          result = run(['systemctl', 'reload' if active else 'start', 'nginx.service'])
+                          time.sleep(2)
+                          state['local_https'] = probe(True)
+                          state['public_https'] = probe()
+                          state['action'] = 'recovered' if result.returncode == 0 and state['local_https'] and state['public_https'] else 'operator_required'
+                          if state['local_https']:
+                              state['failures'] = 0
+                  elif failures >= 2:
+                      state['action'] = 'cooldown'
+                  save(state)
+
+          def save(state):
+              temporary = STATE.with_suffix('.tmp')
+              temporary.write_text(json.dumps(state, indent=2) + '\n')
+              temporary.chmod(0o600)
+              temporary.replace(STATE)
+              print(json.dumps(state), flush=True)
+
+          if __name__ == '__main__':
+              main()
+    - name: Install gateway watchdog service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-gateway-watchdog.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=OOB HTTPS gateway checks and bounded nginx recovery
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/python3 /usr/local/sbin/oob-gateway-watchdog.py
+          TimeoutStartSec=120
+          UMask=0077
+          NoNewPrivileges=true
+          ProtectHome=true
+          ProtectSystem=strict
+          ReadWritePaths=/var/lib/oob-watchdog /var/log/nginx
+          PrivateTmp=true
+    - name: Install gateway timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-gateway-watchdog.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Check OOB HTTPS gateway every minute
+          [Timer]
+          OnBootSec=100s
+          OnUnitInactiveSec=60s
+          AccuracySec=5s
+          Unit=oob-gateway-watchdog.service
+          [Install]
+          WantedBy=timers.target
+    - name: Validate gateway watchdog Python
+      ansible.builtin.command:
+        argv: [python3, -c, "import ast; ast.parse(open('/usr/local/sbin/oob-gateway-watchdog.py').read())"]
+      changed_when: false
+    - name: Enable gateway at boot
+      ansible.builtin.systemd:
+        name: nginx.service
+        enabled: true
+    - name: Enable continuous gateway checks
+      ansible.builtin.systemd:
+        name: oob-gateway-watchdog.timer
+        daemon_reload: true
+        enabled: true
+        state: restarted
+    - name: Run gateway check now
+      ansible.builtin.systemd:
+        name: oob-gateway-watchdog.service
+        state: started
+    - name: Report continuous watchdog operation
+      ansible.builtin.debug:
+        msg:
+          - 'App/database/session and HTTPS gateway checks run every minute and after reboot.'
+          - 'Repairs require two failed checks and have a 15-minute cooldown.'
+          - 'App status: /var/lib/oob-watchdog/status.json'
+          - 'Gateway status: /var/lib/oob-watchdog/gateway.json'
+          - 'Logs: journalctl -u oob-watchdog -u oob-gateway-watchdog'
+          - 'Persistent faults are recorded for operator repair; credentials and business data are preserved.'
