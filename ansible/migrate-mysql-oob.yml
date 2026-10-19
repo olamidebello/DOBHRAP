@@ -158,7 +158,7 @@
       block:
         - name: Block writes during candidate verification
           ansible.builtin.copy:
-            dest: /var/lib/dobhrap/mysql-maintenance
+            dest: /etc/dobhrap-mysql-maintenance
             content: 'Offline migration in progress
 '
             mode: '0644'
@@ -285,7 +285,7 @@
       always:
         - name: Remove write maintenance gate after success or rollback
           ansible.builtin.file:
-            path: /var/lib/dobhrap/mysql-maintenance
+            path: /etc/dobhrap-mysql-maintenance
             state: absent
         - name: Restore recurring timers
           ansible.builtin.systemd:

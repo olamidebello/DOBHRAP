@@ -16,7 +16,10 @@ import tax_services
 import coupons
 import attendance
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
-MYSQL_MAINTENANCE=Path('/var/lib/dobhrap/mysql-maintenance')
+MYSQL_MAINTENANCE=Path('/etc/dobhrap-mysql-maintenance')
+def maintenance_active():
+ try:return MYSQL_MAINTENANCE.exists()
+ except OSError:raise advanced.ServiceError('Unable to check maintenance status. Contact your administrator.',503) from None
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 MOBILE_CACHE={'expires':0,'result':None}
 def mobile_download():
@@ -186,9 +189,8 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self): self.handle_request()
  def do_POST(self): self.handle_request()
  def handle_request(self):
-  if self.command!='GET' and MYSQL_MAINTENANCE.exists():
-   self.reply(503,{'error':'Database migration in progress. Please try again shortly.'});return
   try:
+   if self.command!='GET' and maintenance_active():raise advanced.ServiceError('Database migration in progress. Please try again shortly.',503)
    path=self.path.split('?')[0]; body={}
    if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock','/forgot-password','/reset-password'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return

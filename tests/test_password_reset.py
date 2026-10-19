@@ -68,6 +68,11 @@ class RecoveryTests(unittest.TestCase):
             req=Request('http://127.0.0.1:%d'%server.server_port+path,data=json.dumps(data).encode() if data is not None else None,headers={'Content-Type':'application/json',**(headers or {})})
             with client.open(req) as response:return json.load(response)
         try:
+            from types import SimpleNamespace
+            with patch.object(app,'MYSQL_MAINTENANCE',SimpleNamespace(exists=lambda: (_ for _ in ()).throw(PermissionError('private directory')))):
+                with self.assertRaises(HTTPError) as permission_error:call('/api/login',dict(email='owner@example.com',password='initial-password-123'))
+                self.assertEqual(permission_error.exception.code,503)
+                self.assertIn('maintenance status',json.load(permission_error.exception)['error'])
             csrf=call('/api/login',dict(email='owner@example.com',password='initial-password-123'))['csrf']
             with client.open('http://127.0.0.1:%d/forgot-password'%server.server_port) as response:self.assertIn(b'password-reset.js',response.read())
             result=call('/api/password-reset/admin',dict(email='owner@example.com',current_password='initial-password-123'),{'X-CSRF-Token':csrf})
