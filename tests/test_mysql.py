@@ -169,3 +169,6 @@ class MySQLTests(unittest.TestCase):
                 c.execute('INSERT INTO records(module,data) VALUES(?,?)',('customers','{}'))
                 with self.assertRaises(sqlite3.OperationalError):c._query('CREATE DATABASE `unrelated_application`')
                 c._query('DROP DATABASE `'+database.schema_name()+'`')
+        before=module.APP_CONFIG.read_bytes()
+        with patch('sys.argv',['mysql-provision.py','configure']):module.main()
+        self.assertEqual(module.APP_CONFIG.read_bytes(),before)

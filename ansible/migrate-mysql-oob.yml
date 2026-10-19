@@ -14,14 +14,14 @@
     - name: Require local installation
       ansible.builtin.assert:
         that: ansible_connection == 'local'
-    - name: Check for previous MySQL migration
+    - name: Check whether a backend has already been activated
       ansible.builtin.stat:
-        path: /etc/dobhrap-mysql.json
+        path: /etc/dobhrap-mysql.env
       register: mysql_previous
-    - name: Avoid reimporting or changing an existing MySQL deployment
+    - name: Avoid repeating an activated MySQL migration
       ansible.builtin.assert:
         that: not mysql_previous.stat.exists
-        fail_msg: MySQL configuration already exists. Inspect its migration report before retrying; this playbook never overwrites it.
+        fail_msg: MySQL backend is already activated; inspect its report instead of reimporting data.
     - name: Verify the existing application service
       ansible.builtin.command: systemctl cat oob-business.service
       register: mysql_unit
@@ -76,10 +76,11 @@
       register: mysql_container
       failed_when: false
       changed_when: false
-    - name: Refuse an unrelated existing container
-      ansible.builtin.assert:
-        that: mysql_container.rc != 0
-        fail_msg: dobhrap-mysql already exists; inspect it before continuing.
+    - name: Verify an existing container before resuming
+      ansible.builtin.command:
+        argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/ansible/mysql-provision.py', validate-container]
+      when: mysql_container.rc == 0
+      changed_when: false
     - name: Inspect reserved MySQL storage
       ansible.builtin.command: docker volume inspect dobhrap-mysql-data
       register: mysql_volume
@@ -87,7 +88,7 @@
       changed_when: false
     - name: Refuse reuse of unknown database storage
       ansible.builtin.assert:
-        that: mysql_volume.rc != 0
+        that: mysql_volume.rc != 0 or mysql_container.rc == 0
         fail_msg: Reserved MySQL volume already exists; inspect previous data before migration.
     - name: Start dedicated MySQL with durable storage and loopback access
       ansible.builtin.command:
@@ -105,10 +106,14 @@
           - --max-connections=120
           - --innodb-buffer-pool-size=128M
       no_log: true
+      when: mysql_container.rc != 0
+    - name: Ensure the verified existing container is running
+      ansible.builtin.command: docker start dobhrap-mysql
+      when: mysql_container.rc == 0
     - name: Provision the restricted application database account
       ansible.builtin.command:
         argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/ansible/mysql-provision.py', configure]
-      no_log: true
+      changed_when: true
     - name: Run real MySQL integration tests before pausing production
       ansible.builtin.command:
         argv: ['{{ mysql_release }}/venv/bin/python', -m, unittest, discover, -s, tests, -p, test_mysql.py]

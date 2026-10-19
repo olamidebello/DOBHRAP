@@ -48,8 +48,9 @@ is /etc/dobhrap-mysql.env. Do not print either credential file in support logs.
 Once MySQL has accepted new writes, rollback requires reconciling or restoring
 those writes. Do not switch back to old SQLite files after normal use resumes.
 The automatic rollback occurs before workers restart and before successful
-cutover is declared. An existing MySQL config stops a second migration attempt;
-inspect reports and the candidate container before retrying.
+cutover is declared. An activated backend stops a second migration attempt. A provisioning-only
+failure can resume using the existing verified container and unused credentials.
+Candidates containing imported tables require inspection before retrying.
 
 The scheduled backup now creates private, compressed MySQL SQL dumps from one
 consistent InnoDB snapshot across workspace schemas. They are retained for 14
