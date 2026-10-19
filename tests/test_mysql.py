@@ -172,3 +172,17 @@ class MySQLTests(unittest.TestCase):
         before=module.APP_CONFIG.read_bytes()
         with patch('sys.argv',['mysql-provision.py','configure']):module.main()
         self.assertEqual(module.APP_CONFIG.read_bytes(),before)
+
+    def test_password_reset_on_mysql_revokes_sessions(self):
+        import password_reset as recovery
+        import time
+        with app.connect() as c:
+            user=c.execute('SELECT * FROM users LIMIT 1').fetchone()
+            c.execute('INSERT INTO sessions VALUES(?,?,?,?)',('recovery-session',user['id'],int(time.time())+3600,'csrf'));c.commit()
+            result=recovery.authenticated(c,user,dict(current_password='platform-password-1234',email='owner@example.com'),admin=True);c.commit()
+            token=result['reset_url'].split('#token=')[1]
+            recovery.finish(c,dict(token=token,password='recovered-password-1234',confirm_password='recovered-password-1234'),'test');c.commit()
+            self.assertEqual(c.execute('SELECT count(*) FROM sessions').fetchone()[0],0)
+            updated=c.execute('SELECT * FROM users LIMIT 1').fetchone()
+            self.assertEqual(updated['hash'],app.password('recovered-password-1234',updated['salt']))
+            with self.assertRaises(advanced.ServiceError):recovery.finish(c,dict(token=token),'test')

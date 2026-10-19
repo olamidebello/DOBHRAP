@@ -11,8 +11,9 @@ import json
 import time
 from urllib.parse import urlsplit
 
-SECRET_FIELDS={'SUPPORT_WEBHOOK_TOKEN','OPENAI_API_KEY','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','PAYSTACK_SECRET_KEY','PLAID_CLIENT_ID','PLAID_SECRET','CHECK_API_KEY','EFILE_GATEWAY_TOKEN'}
+SECRET_FIELDS={'SMTP_PASSWORD','SUPPORT_WEBHOOK_TOKEN','OPENAI_API_KEY','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','PAYSTACK_SECRET_KEY','PLAID_CLIENT_ID','PLAID_SECRET','CHECK_API_KEY','EFILE_GATEWAY_TOKEN'}
 FIELDS={
+ 'SMTP_HOST':'text','SMTP_PORT':'port','SMTP_USERNAME':'email_text','SMTP_PASSWORD':'secret','SMTP_FROM':'email','SMTP_SECURITY':['starttls','tls'],
  'SUPPORT_WEBHOOK_TOKEN':'secret',
  'OPENAI_API_KEY':'secret','TAX_ANALYST_MODEL':'text','DOBHRAP_ENABLE_TAX_ANALYST':'bool','TAX_AI_MODEL':'text','DOBHRAP_ENABLE_TAX_AI':'bool','SUPPORT_AI_MODEL':'text','DOBHRAP_ENABLE_SUPPORT_AI':'bool','DOBHRAP_SUPPORT_AUTO_AI':'bool',
  'STRIPE_SECRET_KEY':'secret','STRIPE_WEBHOOK_SECRET':'secret','PAYSTACK_SECRET_KEY':'secret',
@@ -56,6 +57,9 @@ def validate(name,value):
  kind=FIELDS.get(name)
  if kind is None:raise a.ServiceError('Unsupported configuration field')
  if not isinstance(value,str) or len(value)>4096 or '\n' in value or '\r' in value:raise a.ServiceError('Invalid setting value')
+ if kind=='port' and value and (not value.isdigit() or not 1<=int(value)<=65535):raise a.ServiceError('Enter a valid SMTP port')
+ if kind=='email' and value and not re.fullmatch(r'[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+',value):raise a.ServiceError('Enter a valid sender email')
+ if kind=='email_text' and len(value)>254:raise a.ServiceError('SMTP username is too long')
  if kind=='bool' and value not in ('0','1'):raise a.ServiceError('Invalid feature switch')
  if isinstance(kind,list) and value not in kind:raise a.ServiceError('Invalid provider environment')
  if kind=='text' and value and not re.fullmatch('[A-Za-z0-9._:-]{1,100}',value):raise a.ServiceError('Invalid model name')

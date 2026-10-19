@@ -5,6 +5,7 @@ from pathlib import Path
 from contextlib import ExitStack
 import advanced
 import database
+import password_reset
 import marketplace
 import provider_settings
 import support
@@ -96,6 +97,7 @@ def init():
  if not database.mysql_enabled():Path(DB).parent.mkdir(parents=True,exist_ok=True)
  with connect() as c:
   c.executescript("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE,salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS setup_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tenants(id INTEGER PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',created TEXT DEFAULT CURRENT_TIMESTAMP);")
+  password_reset.initialize(c)
   tax_services.initialize(c)
   attendance.initialize_platform(c)
   if 'tenant_id' not in [row[1] for row in c.execute('PRAGMA table_info(users)')]:c.execute('ALTER TABLE users ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1')
@@ -188,11 +190,11 @@ class Handler(BaseHTTPRequestHandler):
    self.reply(503,{'error':'Database migration in progress. Please try again shortly.'});return
   try:
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock'):
+   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock','/forgot-password','/reset-password'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/attendance.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -243,6 +245,10 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/register' and self.command=='POST':
      if self.headers.get('X-Registration-Request')!='1':self.reply(403,{'error':'Use the registration page'});return
      result=register_workspace(c,body);c.commit();self.reply(201,result);return
+    if path in ('/api/password-reset/request','/api/password-reset/complete') and self.command=='POST':
+     if self.headers.get('X-Password-Reset-Request')!='1':raise advanced.ServiceError('Use the password recovery form',403)
+     result=password_reset.request(c,body,self.client_address[0]) if path.endswith('/request') else password_reset.finish(c,body,self.client_address[0])
+     c.commit();self.reply(200,result);return
     if path=='/api/login' and self.command=='POST':
      u=c.execute('SELECT * FROM users WHERE lower(email)=?',(str(body.get('email','')).strip().lower(),)).fetchone()
      if not u or not hmac.compare_digest(u['hash'],password(body.get('password',''),u['salt'])): time.sleep(.5); self.reply(401,{'error':'Invalid credentials'}); return
@@ -253,6 +259,8 @@ class Handler(BaseHTTPRequestHandler):
     if not u:self.reply(401,{'error':'Sign in required'}); return
     if self.command=='POST' and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),u['csrf']): self.reply(403,{'error':'Invalid CSRF token'}); return
     if path=='/api/logout' and self.command=='POST': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
+    if path in ('/api/password-reset/admin','/api/password/change') and self.command=='POST':
+     result=password_reset.authenticated(c,u,body,admin=path.endswith('/admin'));c.commit();self.reply(200,result);return
     intl_result=international.dispatch(path,self.command,body,c,u)
     if intl_result is not None:c.commit();self.reply(200,intl_result);return
     settings_result=provider_settings.dispatch(path,self.command,body,c,u)
