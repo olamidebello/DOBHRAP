@@ -8,7 +8,7 @@ git pull --ff-only
 ansible-playbook -i 'dobhrap,' -c local ansible/migrate-mysql-oob.yml
 ```
 
-The playbook installs a dedicated Oracle MySQL 8.4 container, bound only to
+The playbook installs a dedicated Debian-based Oracle MySQL 8.0.46 container, bound only to
 127.0.0.1:3307 with a durable Docker volume and automatic restart. Existing
 MySQL instances and other hosted sites are not reconfigured. Docker is installed
 if absent. The image download and tests happen before the offline migration.
@@ -73,3 +73,8 @@ never use credentials for unrelated services. Runtime SQL compatibility is
 centralized in database.py. SQLite remains the default unless the backend env
 explicitly selects MySQL; standalone SQLite repair playbooks must not be used
 to roll back a live MySQL deployment.
+
+CPU compatibility: a confirmed x86-64-v2 startup failure in the older 8.4 image
+is handled by first testing the Debian image, then stopping and renaming the
+failed container. Its old volume is preserved. The replacement uses fresh
+dobhrap-mysql-debian-data storage; MySQL 8.4 data is never opened by MySQL 8.0.

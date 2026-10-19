@@ -27,15 +27,44 @@ def validate_container():
     result=subprocess.run(['docker','container','inspect','dobhrap-mysql'],capture_output=True,text=True,check=True)
     info=json.loads(result.stdout)[0]
     assert info['Config'].get('Labels',{}).get('app')=='dobhrap-mysql', 'Container label mismatch'
-    assert info['Config']['Image']=='mysql:8.4', 'Unexpected MySQL image'
-    assert any(m.get('Name')=='dobhrap-mysql-data' and m.get('Destination')=='/var/lib/mysql' for m in info['Mounts']), 'Storage mismatch'
+    assert info['Config']['Image'] in ('mysql:8.4','mysql:8.0.46-debian'), 'Unexpected MySQL image'
+    assert any(m.get('Name') in ('dobhrap-mysql-data','dobhrap-mysql-debian-data') and m.get('Destination')=='/var/lib/mysql' for m in info['Mounts']), 'Storage mismatch'
     bindings=info['HostConfig']['PortBindings'].get('3306/tcp',[])
     assert bindings==[{'HostIp':'127.0.0.1','HostPort':'3307'}], 'Unexpected port binding'
     print('Existing dedicated container identity verified')
+    return info
+
+
+def prepare_container():
+    result=subprocess.run(['docker','container','inspect','dobhrap-mysql'],capture_output=True,text=True)
+    if result.returncode:
+        return
+    info=validate_container()
+    if info['Config']['Image']!='mysql:8.4':
+        return
+    logs=subprocess.run(['docker','logs','--tail','100','dobhrap-mysql'],capture_output=True,text=True,check=True)
+    if 'CPU does not support x86-64-v2' not in logs.stdout+logs.stderr:
+        return
+    if APP_CONFIG.exists() or Path('/etc/dobhrap-mysql.env').exists():
+        raise RuntimeError('CPU-incompatible container found with candidate credentials or activated backend; inspect data before replacement')
+    image='mysql:8.0.46-debian'
+    # Verify the replacement image runs before touching the failed container.
+    subprocess.run(['docker','pull',image],capture_output=True,text=True,check=True)
+    subprocess.run(['docker','run','--rm','--entrypoint','mysqld',image,'--version'],capture_output=True,text=True,check=True)
+    volume=subprocess.run(['docker','volume','inspect','dobhrap-mysql-debian-data'],capture_output=True,text=True)
+    if volume.returncode==0:
+        raise RuntimeError('Replacement storage already exists; inspect it before retrying')
+    name='dobhrap-mysql-cpu-incompatible-'+uuid.uuid4().hex[:12]
+    subprocess.run(['docker','update','--restart=no','dobhrap-mysql'],capture_output=True,text=True,check=True)
+    subprocess.run(['docker','stop','dobhrap-mysql'],capture_output=True,text=True,check=True)
+    subprocess.run(['docker','rename','dobhrap-mysql',name],capture_output=True,text=True,check=True)
+    print('Preserved CPU-incompatible container as '+name+'; its original volume is unchanged')
 
 
 def main():
-    mode=argparse.ArgumentParser();mode.add_argument('action',choices=['prepare','configure','validate-container']);args=mode.parse_args()
+    mode=argparse.ArgumentParser();mode.add_argument('action',choices=['prepare','configure','validate-container','prepare-container']);args=mode.parse_args()
+    if args.action=='prepare-container':
+        prepare_container();return
     if args.action=='validate-container':
         validate_container();return
     if args.action=='prepare':

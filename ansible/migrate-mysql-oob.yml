@@ -1,6 +1,6 @@
 ---
 # Run on the hosting server from a clean repository checkout.
-# Installs a dedicated Oracle MySQL 8.4 container on loopback port 3307.
+# Installs a dedicated Debian-based Oracle MySQL 8.0 container on loopback port 3307.
 - name: Migrate OOB platform and all workspaces to MySQL
   hosts: dobhrap
   become: true
@@ -71,6 +71,9 @@
       ansible.builtin.command:
         argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/ansible/mysql-provision.py', prepare]
       no_log: true
+    - name: Preserve confirmed CPU-incompatible container and prepare compatible replacement
+      ansible.builtin.command:
+        argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/ansible/mysql-provision.py', prepare-container]
     - name: Inspect dedicated container
       ansible.builtin.command: docker container inspect dobhrap-mysql
       register: mysql_container
@@ -82,7 +85,7 @@
       when: mysql_container.rc == 0
       changed_when: false
     - name: Inspect reserved MySQL storage
-      ansible.builtin.command: docker volume inspect dobhrap-mysql-data
+      ansible.builtin.command: docker volume inspect dobhrap-mysql-debian-data
       register: mysql_volume
       failed_when: false
       changed_when: false
@@ -101,8 +104,8 @@
           - --restart=unless-stopped
           - --env-file=/etc/dobhrap-mysql-container.env
           - --publish=127.0.0.1:3307:3306
-          - --mount=type=volume,source=dobhrap-mysql-data,target=/var/lib/mysql
-          - mysql:8.4
+          - --mount=type=volume,source=dobhrap-mysql-debian-data,target=/var/lib/mysql
+          - mysql:8.0.46-debian
           - --max-connections=120
           - --innodb-buffer-pool-size=128M
       no_log: true
