@@ -7,6 +7,9 @@ import sqlite3
 import subprocess
 import uuid
 
+import sys
+sys.path.insert(0, '/opt/dobhrap/current')
+import database
 DB = '/var/lib/dobhrap/dobhrap.db'
 SOURCE = Path('/opt/oob-control')
 
@@ -19,9 +22,9 @@ def run(argv, log, timeout=180):
 def main():
     if os.geteuid() != 0:
         raise RuntimeError('The management broker must run as its root-owned systemd service')
-    if not Path(DB).exists():
+    if not database.mysql_enabled() and not Path(DB).exists():
         return
-    with sqlite3.connect(DB, timeout=30) as c:
+    with database.connect(DB) as c:
         c.row_factory = sqlite3.Row
         if not c.execute("SELECT 1 FROM sqlite_master WHERE name='platform_jobs'").fetchone():
             return

@@ -5,6 +5,7 @@ import os
 import hmac
 import re
 import sqlite3
+import database
 import sys
 import json
 import time
@@ -31,7 +32,7 @@ def initialize(c):
 def get(name,default=None):
  if name not in FIELDS:return os.environ.get(name,default)
  try:
-  with sqlite3.connect(db_path(),timeout=10) as c:row=c.execute('SELECT value FROM provider_settings WHERE key=?',(name,)).fetchone()
+  with database.connect(db_path()) as c:row=c.execute('SELECT value FROM provider_settings WHERE key=?',(name,)).fetchone()
  except sqlite3.OperationalError:return os.environ.get(name,default)
  if not row:return os.environ.get(name,default)
  import advanced as a

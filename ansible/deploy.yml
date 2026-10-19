@@ -58,7 +58,7 @@
       register: branding_asset
     - name: Derive immutable source release ID
       ansible.builtin.set_fact:
-        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/attendance.py') + lookup('file', app_source + '/attendance.js') + lookup('file', app_source + '/tests/test_attendance.py') + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/tax_preparation.py') + lookup('file', app_source + '/tax_rules.py') + lookup('file', app_source + '/tax_analyst.py') + lookup('file', app_source + '/tax_services.py') + lookup('file', app_source + '/coupons.py') + lookup('file', app_source + '/tests/test_coupons.py') + lookup('file', app_source + '/tests/test_tax_services.py') + lookup('file', app_source + '/tax-analyst.js') + lookup('file', app_source + '/tests/test_tax_analyst.py') + lookup('file', app_source + '/tax-preparation.js') + lookup('file', app_source + '/tests/test_tax_preparation.py') + lookup('file', app_source + '/international.py') + lookup('file', app_source + '/international.js') + lookup('file', app_source + '/tests/test_international.py') + lookup('file', app_source + '/provider_settings.py') + lookup('file', app_source + '/support.py') + lookup('file', app_source + '/support-ui.js') + lookup('file', app_source + '/tests/test_support.py') + lookup('file', app_source + '/marketplace.py') + lookup('file', app_source + '/tests/test_marketplace.py') + lookup('file', app_source + '/bank_import.py') + lookup('file', app_source + '/tests/test_bank_import.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
+        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/attendance.py') + lookup('file', app_source + '/attendance.js') + lookup('file', app_source + '/tests/test_attendance.py') + lookup('file', app_source + '/database.py') + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/tax_preparation.py') + lookup('file', app_source + '/tax_rules.py') + lookup('file', app_source + '/tax_analyst.py') + lookup('file', app_source + '/tax_services.py') + lookup('file', app_source + '/coupons.py') + lookup('file', app_source + '/tests/test_coupons.py') + lookup('file', app_source + '/tests/test_tax_services.py') + lookup('file', app_source + '/tax-analyst.js') + lookup('file', app_source + '/tests/test_tax_analyst.py') + lookup('file', app_source + '/tax-preparation.js') + lookup('file', app_source + '/tests/test_tax_preparation.py') + lookup('file', app_source + '/international.py') + lookup('file', app_source + '/international.js') + lookup('file', app_source + '/tests/test_international.py') + lookup('file', app_source + '/provider_settings.py') + lookup('file', app_source + '/support.py') + lookup('file', app_source + '/support-ui.js') + lookup('file', app_source + '/tests/test_support.py') + lookup('file', app_source + '/marketplace.py') + lookup('file', app_source + '/tests/test_marketplace.py') + lookup('file', app_source + '/bank_import.py') + lookup('file', app_source + '/tests/test_bank_import.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
@@ -105,7 +105,7 @@
         owner: root
         group: "{{ service_user }}"
         mode: '0640'
-      loop: [assets/oob-logo.png, assets/app-icon-192.png, assets/app-icon-512.png, assets/app-icon.svg, manifest.webmanifest, service-worker.js, attendance.py, attendance.js, tests/test_attendance.py, app.py, advanced.py, tax_preparation.py, tax_rules.py, tax-preparation.js, tax_analyst.py, tax_services.py, coupons.py, tax-analyst.js, international.py, international.js, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, worker.py, backup.py, index.html, advanced.js, workspace.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py, tests/test_bank_import.py, tests/test_marketplace.py, tests/test_support.py, tests/test_international.py, tests/test_tax_preparation.py, tests/test_tax_analyst.py, tests/test_tax_services.py, tests/test_coupons.py, tests/test_watchdog.py]
+      loop: [assets/oob-logo.png, assets/app-icon-192.png, assets/app-icon-512.png, assets/app-icon.svg, manifest.webmanifest, service-worker.js, attendance.py, attendance.js, tests/test_attendance.py, app.py, database.py, advanced.py, tax_preparation.py, tax_rules.py, tax-preparation.js, tax_analyst.py, tax_services.py, coupons.py, tax-analyst.js, international.py, international.js, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, worker.py, backup.py, index.html, advanced.js, workspace.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py, tests/test_bank_import.py, tests/test_marketplace.py, tests/test_support.py, tests/test_international.py, tests/test_tax_preparation.py, tests/test_tax_analyst.py, tests/test_tax_services.py, tests/test_coupons.py, tests/test_watchdog.py]
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
@@ -254,6 +254,7 @@
           Group={{ service_user }}
           WorkingDirectory={{ app_root }}/current
           EnvironmentFile=/etc/dobhrap.env
+          EnvironmentFile=-/etc/dobhrap-mysql.env
           ExecStart={{ app_root }}/current/venv/bin/python {{ app_root }}/current/{{ item.script }}
           {{ item.restart }}
           {% if item.type == "simple" %}
@@ -531,7 +532,7 @@
         group: root
         mode: '0600'
         directory_mode: '0700'
-      loop: [attendance.py, attendance.js, tests/test_attendance.py, app.py, advanced.py, tax_preparation.py, tax_rules.py, tax-preparation.js, tax_analyst.py, tax_services.py, coupons.py, tax-analyst.js, international.py, international.js, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, advanced.js, workspace.js, worker.py, backup.py, index.html, requirements.txt, README.md, manifest.webmanifest, service-worker.js, 'ansible/', 'tests/', 'assets/', 'mobile/']
+      loop: [attendance.py, attendance.js, tests/test_attendance.py, app.py, database.py, advanced.py, tax_preparation.py, tax_rules.py, tax-preparation.js, tax_analyst.py, tax_services.py, coupons.py, tax-analyst.js, international.py, international.js, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, advanced.js, workspace.js, worker.py, backup.py, index.html, requirements.txt, README.md, manifest.webmanifest, service-worker.js, 'ansible/', 'tests/', 'assets/', 'mobile/']
       when: not (ansible_connection == 'local' and (app_source | realpath) == '/opt/oob-control')
     - name: Install root-owned fixed-operation management broker
       ansible.builtin.copy:
@@ -552,7 +553,8 @@
           Type=oneshot
           User=root
           EnvironmentFile=/etc/dobhrap.env
-          ExecStart=/usr/bin/python3 /opt/oob-control/admin-runner.py
+          EnvironmentFile=-/etc/dobhrap-mysql.env
+          ExecStart=/opt/dobhrap/current/venv/bin/python /opt/oob-control/admin-runner.py
           TimeoutStartSec=1500
           UMask=0077
     - name: Install management operation timer

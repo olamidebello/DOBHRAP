@@ -4,6 +4,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from contextlib import ExitStack
 import advanced
+import database
 import marketplace
 import provider_settings
 import support
@@ -14,6 +15,7 @@ import tax_services
 import coupons
 import attendance
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
+MYSQL_MAINTENANCE=Path('/var/lib/dobhrap/mysql-maintenance')
 MODULES={'customers':['name','email','address'],'vendors':['name','email','address'],'products':['name','sku','price','quantity'],'invoices':['name','customer','amount','due_date'],'bills':['name','vendor','amount','due_date'],'expenses':['name','category','amount','date'],'projects':['name','customer','budget','status'],'employees':['name','email','job','hourly_rate'],'time':['name','employee','hours','date'],'leave':['name','employee','start','end','status'],'recruiting':['name','email','position','status'],'benefits':['name','employee','plan','status'],'performance':['name','employee','goal','status'],'tax_returns':['name','year','filing_status','status'],'tax_documents':['name','return_id','document_type','status'],'tax_income':['name','return_id','income_type','amount'],'tax_deductions':['name','return_id','category','amount'],'bank_review':['name','account','amount','status'],'tasks':['name','assignee','due_date','status']}
 MOBILE_CACHE={'expires':0,'result':None}
 def mobile_download():
@@ -31,7 +33,7 @@ def mobile_download():
  return result
 
 def connect():
- c=sqlite3.connect(DB,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+ return database.connect(DB)
 
 def password(p,s): return hashlib.scrypt(p.encode(),salt=bytes.fromhex(s),n=16384,r=8,p=1).hex()
 def setup_account(c, body):
@@ -64,8 +66,8 @@ def tenant_connect(tenant_id):
  tenant_id=int(tenant_id)
  if tenant_id<1: raise ValueError('Invalid workspace')
  path=Path(DB) if tenant_id==1 else Path(DB).parent/'tenants'/('tenant-'+str(tenant_id)+'.db')
- if not path.exists(): raise advanced.ServiceError('Workspace database unavailable',503)
- c=sqlite3.connect(path,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+ if not database.mysql_enabled() and not path.exists(): raise advanced.ServiceError('Workspace database unavailable',503)
+ return database.connect(path,tenant_id=tenant_id)
 
 def register_workspace(c,body):
  c.execute('BEGIN IMMEDIATE')
@@ -78,17 +80,20 @@ def register_workspace(c,body):
  if not 14<=len(p)<=1024 or p!=body.get('confirm_password'):raise ValueError('Use matching passwords of 14 to 1024 characters')
  if c.execute('SELECT 1 FROM users WHERE lower(email)=?',(email,)).fetchone():raise ValueError('An account already uses that email')
  tid=c.execute('INSERT INTO tenants(name,service_mode) VALUES(?,?)',(company,mode)).lastrowid
- root=Path(DB).parent/'tenants';root.mkdir(mode=0o700,exist_ok=True)
- target=root/('tenant-'+str(tid)+'.db')
- with sqlite3.connect(target) as tenant:initialize_business(tenant)
- target.chmod(0o600)
+ if database.mysql_enabled():
+  with database.connect(tenant_id=tid,create=True) as tenant:initialize_business(tenant)
+ else:
+  root=Path(DB).parent/'tenants';root.mkdir(mode=0o700,exist_ok=True)
+  target=root/('tenant-'+str(tid)+'.db')
+  with sqlite3.connect(target) as tenant:initialize_business(tenant)
+  target.chmod(0o600)
  salt=secrets.token_hex(16)
  c.execute('INSERT INTO users(email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?)',(email,salt,password(p,salt),'admin',tid))
  c.execute('INSERT INTO audit(user_id,action) VALUES(0,?)',('Workspace registered '+str(tid),))
  return {'ok':True,'tenant_id':tid}
 
 def init():
- Path(DB).parent.mkdir(parents=True,exist_ok=True)
+ if not database.mysql_enabled():Path(DB).parent.mkdir(parents=True,exist_ok=True)
  with connect() as c:
   c.executescript("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,email TEXT UNIQUE,salt TEXT,hash TEXT,role TEXT); CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id INTEGER,expires INTEGER,csrf TEXT); CREATE TABLE IF NOT EXISTS setup_state(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tenants(id INTEGER PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',created TEXT DEFAULT CURRENT_TIMESTAMP);")
   tax_services.initialize(c)
@@ -179,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self): self.handle_request()
  def do_POST(self): self.handle_request()
  def handle_request(self):
+  if self.command!='GET' and MYSQL_MAINTENANCE.exists():
+   self.reply(503,{'error':'Database migration in progress. Please try again shortly.'});return
   try:
    path=self.path.split('?')[0]; body={}
    if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock'):

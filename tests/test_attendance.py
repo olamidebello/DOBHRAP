@@ -47,7 +47,7 @@ class AttendanceTests(unittest.TestCase):
    with self.assertRaises(a.ServiceError):self.employee({**body,**geo},token,anti,now)
   self.employee({**body,'latitude':32,'longitude':-96,'accuracy':10,'location_time':now},token,anti,now)
   self.employee({'action':'clock-out','request_id':'geo-request-out01'},token,anti,now+60,enabled=False)
-  with self.assertRaises(a.ServiceError):t.site_check({'geofence':False,'start_minute':60,'end_minute':120,'weekdays':[0]}, {'site_id':'x'},now,'UTC')
+  with self.assertRaises(a.ServiceError):t.site_check({'geofence':False,'start_minute':60,'end_minute':120,'weekdays':[0]}, {'site_id':'x'},int(datetime(2026,10,18,12,tzinfo=timezone.utc).timestamp()),'UTC')
  def historical(self,w,hours,kind='employee'):
   start=int(datetime(2026,10,5,tzinfo=timezone.utc).timestamp())
   with app.connect() as c:

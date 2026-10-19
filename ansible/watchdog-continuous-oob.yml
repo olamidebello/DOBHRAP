@@ -61,8 +61,10 @@
                       state['action'] = 'public_dns_network_or_tls_operator_required'
                   elif failures >= 2 and now - state['last_repair'] >= 900:
                       # Invalid configuration is recorded; never reload it.
-                      if run(['nginx', '-t']).returncode:
-                          state['action'] = 'invalid_nginx_config_operator_required'
+                      test = run(['nginx', '-t'])
+                      if test.returncode:
+                          state['action'] = 'nginx_validation_failed'
+                          state['diagnostic'] = test.stderr[-2000:]
                       else:
                           state.update(last_repair=now, action='repair_pending')
                           save(state)
@@ -104,7 +106,7 @@
           NoNewPrivileges=true
           ProtectHome=true
           ProtectSystem=strict
-          ReadWritePaths=/var/lib/oob-watchdog /var/log/nginx
+          ReadWritePaths=/var/lib/oob-watchdog /var/log/nginx /run
           PrivateTmp=true
     - name: Install gateway timer
       ansible.builtin.copy:

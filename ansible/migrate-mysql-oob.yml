@@ -1,0 +1,296 @@
+---
+# Run on the hosting server from a clean repository checkout.
+# Installs a dedicated Oracle MySQL 8.4 container on loopback port 3307.
+- name: Migrate OOB platform and all workspaces to MySQL
+  hosts: dobhrap
+  become: true
+  gather_facts: true
+  vars:
+    mysql_release: '/opt/dobhrap/releases/mysql-{{ ansible_date_time.epoch }}'
+    mysql_source: '{{ playbook_dir }}/..'
+    mysql_units: [oob-business, oob-business-worker, oob-business-backup, oob-business-support, oob-business-marketplace, oob-business-bank-import]
+    mysql_timers: [oob-business-worker, oob-business-backup, oob-business-support, oob-business-marketplace, oob-business-bank-import, oob-watchdog, oob-gateway-watchdog, oob-admin]
+  tasks:
+    - name: Require local installation
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Check for previous MySQL migration
+      ansible.builtin.stat:
+        path: /etc/dobhrap-mysql.json
+      register: mysql_previous
+    - name: Avoid reimporting or changing an existing MySQL deployment
+      ansible.builtin.assert:
+        that: not mysql_previous.stat.exists
+        fail_msg: MySQL configuration already exists. Inspect its migration report before retrying; this playbook never overwrites it.
+    - name: Verify the existing application service
+      ansible.builtin.command: systemctl cat oob-business.service
+      register: mysql_unit
+      changed_when: false
+    - name: Require the expected deployment
+      ansible.builtin.assert:
+        that:
+          - "'/opt/dobhrap/current/app.py' in mysql_unit.stdout"
+          - "'EnvironmentFile=/etc/dobhrap.env' in mysql_unit.stdout"
+    - name: Check Docker availability
+      ansible.builtin.command: docker --version
+      register: mysql_docker
+      failed_when: false
+      changed_when: false
+    - name: Install Docker when absent
+      ansible.builtin.apt:
+        name: [docker.io, python3-venv]
+        state: present
+        update_cache: true
+      when: mysql_docker.rc != 0
+    - name: Ensure Docker is running
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+    - name: Reserve a private staged release
+      ansible.builtin.file:
+        path: '{{ mysql_release }}'
+        state: directory
+        owner: root
+        group: dobhrap-app
+        mode: '0750'
+    - name: Archive committed migration source
+      ansible.builtin.command:
+        argv: [git, -C, '{{ mysql_source }}', archive, --format=tar, '--output={{ mysql_release }}.tar', HEAD]
+    - name: Extract staged release
+      ansible.builtin.unarchive:
+        src: '{{ mysql_release }}.tar'
+        dest: '{{ mysql_release }}'
+        remote_src: true
+    - name: Install isolated runtime
+      ansible.builtin.pip:
+        requirements: '{{ mysql_release }}/requirements.txt'
+        virtualenv: '{{ mysql_release }}/venv'
+        virtualenv_command: python3 -m venv
+    - name: Prepare private container credentials
+      ansible.builtin.command:
+        argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/ansible/mysql-provision.py', prepare]
+      no_log: true
+    - name: Inspect dedicated container
+      ansible.builtin.command: docker container inspect dobhrap-mysql
+      register: mysql_container
+      failed_when: false
+      changed_when: false
+    - name: Refuse an unrelated existing container
+      ansible.builtin.assert:
+        that: mysql_container.rc != 0
+        fail_msg: dobhrap-mysql already exists; inspect it before continuing.
+    - name: Inspect reserved MySQL storage
+      ansible.builtin.command: docker volume inspect dobhrap-mysql-data
+      register: mysql_volume
+      failed_when: false
+      changed_when: false
+    - name: Refuse reuse of unknown database storage
+      ansible.builtin.assert:
+        that: mysql_volume.rc != 0
+        fail_msg: Reserved MySQL volume already exists; inspect previous data before migration.
+    - name: Start dedicated MySQL with durable storage and loopback access
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name=dobhrap-mysql
+          - --label=app=dobhrap-mysql
+          - --restart=unless-stopped
+          - --env-file=/etc/dobhrap-mysql-container.env
+          - --publish=127.0.0.1:3307:3306
+          - --mount=type=volume,source=dobhrap-mysql-data,target=/var/lib/mysql
+          - mysql:8.4
+          - --max-connections=120
+          - --innodb-buffer-pool-size=128M
+      no_log: true
+    - name: Provision the restricted application database account
+      ansible.builtin.command:
+        argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/ansible/mysql-provision.py', configure]
+      no_log: true
+    - name: Run real MySQL integration tests before pausing production
+      ansible.builtin.command:
+        argv: ['{{ mysql_release }}/venv/bin/python', -m, unittest, discover, -s, tests, -p, test_mysql.py]
+        chdir: '{{ mysql_release }}'
+      environment:
+        OOB_TEST_MYSQL_CONFIG: /etc/dobhrap-mysql.json
+    - name: Validate the canonical source path privately
+      ansible.builtin.command:
+        argv:
+          - '{{ mysql_release }}/venv/bin/python'
+          - -c
+          - |
+            import pathlib, shlex
+            env={}
+            for line in pathlib.Path('/etc/dobhrap.env').read_text().splitlines():
+                if line.strip() and not line.lstrip().startswith('#') and '=' in line:
+                    key,value=line.split('=',1)
+                    if key=='DOBHRAP_DB':env[key]=shlex.split(value)[0]
+            assert env.get('DOBHRAP_DB')=='/var/lib/dobhrap/dobhrap.db', 'Unexpected SQLite source path; inspect privately before migration'
+      changed_when: false
+      no_log: true
+    - name: Preserve current release for rollback
+      ansible.builtin.command: readlink -f /opt/dobhrap/current
+      register: mysql_old_release
+      changed_when: false
+    - name: Preserve previous management broker
+      ansible.builtin.copy:
+        src: /opt/oob-control/admin-runner.py
+        dest: '{{ mysql_release }}.original-admin-runner.py'
+        remote_src: true
+        mode: '0700'
+    - name: Back up private runtime configuration
+      ansible.builtin.copy:
+        src: /etc/dobhrap.env
+        dest: '{{ mysql_release }}.original.env'
+        remote_src: true
+        mode: '0600'
+    - name: Migrate and switch only after data verification
+      block:
+        - name: Block writes during candidate verification
+          ansible.builtin.copy:
+            dest: /var/lib/dobhrap/mysql-maintenance
+            content: 'Offline migration in progress
+'
+            mode: '0644'
+        - name: Stop timers during offline migration
+          ansible.builtin.systemd:
+            name: '{{ item }}.timer'
+            state: stopped
+          loop: '{{ mysql_timers }}'
+        - name: Stop all application and management processes
+          ansible.builtin.systemd:
+            name: '{{ item }}.service'
+            state: stopped
+          loop: '{{ mysql_units + ["oob-admin", "oob-watchdog", "oob-gateway-watchdog"] }}'
+        - name: Snapshot copy and verify every registered workspace
+          ansible.builtin.command:
+            argv: ['{{ mysql_release }}/venv/bin/python', '{{ mysql_release }}/mysql_migrate.py', --source, /var/lib/dobhrap/dobhrap.db, --backup-dir, /var/backups/dobhrap]
+          environment:
+            DOBHRAP_DB_BACKEND: mysql
+            DOBHRAP_MYSQL_CONFIG: /etc/dobhrap-mysql.json
+          register: mysql_copy
+        - name: Persist verification report
+          ansible.builtin.copy:
+            dest: /var/lib/dobhrap/mysql-migration.json
+            content: '{{ mysql_copy.stdout }}'
+            mode: '0600'
+        - name: Install persistent backend environment
+          ansible.builtin.copy:
+            dest: /etc/dobhrap-mysql.env
+            mode: '0600'
+            content: |
+              DOBHRAP_DB_BACKEND=mysql
+              DOBHRAP_MYSQL_CONFIG=/etc/dobhrap-mysql.json
+        - name: Create service override directories
+          ansible.builtin.file:
+            path: '/etc/systemd/system/{{ item }}.service.d'
+            state: directory
+            mode: '0755'
+          loop: '{{ mysql_units + ["oob-admin"] }}'
+        - name: Apply MySQL backend to web and background workers
+          ansible.builtin.copy:
+            dest: '/etc/systemd/system/{{ item }}.service.d/50-mysql.conf'
+            mode: '0644'
+            content: |
+              [Service]
+              EnvironmentFile=/etc/dobhrap-mysql.env
+              User=dobhrap-app
+              Group=dobhrap-app
+              ExecStartPre=
+          loop: '{{ mysql_units }}'
+        - name: Install migrated management broker
+          ansible.builtin.copy:
+            src: '{{ mysql_release }}/ansible/admin-runner.py'
+            dest: /opt/oob-control/admin-runner.py
+            remote_src: true
+            mode: '0700'
+        - name: Update management broker runtime and backend
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/oob-admin.service.d/50-mysql.conf
+            mode: '0644'
+            content: |
+              [Service]
+              EnvironmentFile=/etc/dobhrap-mysql.env
+              ExecStart=
+              ExecStart=/opt/dobhrap/current/venv/bin/python /opt/oob-control/admin-runner.py
+        - name: Switch application release
+          ansible.builtin.file:
+            src: '{{ mysql_release }}'
+            dest: /opt/dobhrap/current
+            state: link
+            force: true
+        - name: Start migrated web service
+          ansible.builtin.systemd:
+            name: oob-business.service
+            daemon_reload: true
+            state: started
+        - name: Verify local HTTPS with the migrated database
+          ansible.builtin.command:
+            argv: [curl, --fail, --silent, --show-error, --max-time, '10', --noproxy, '*', --resolve, 'olamideolatayobello.com:443:127.0.0.1', https://olamideolatayobello.com/api/setup/status]
+          register: mysql_probe
+          changed_when: false
+          until: mysql_probe.rc == 0 and not (mysql_probe.stdout | from_json).required
+          retries: 10
+          delay: 3
+        - name: Record successful MySQL cutover
+          ansible.builtin.copy:
+            dest: /var/lib/dobhrap/mysql-cutover-complete
+            content: '{{ mysql_old_release.stdout }}\n'
+            mode: '0600'
+      rescue:
+        - name: Stop candidate application before reverting
+          ansible.builtin.systemd:
+            name: '{{ item }}.service'
+            state: stopped
+          loop: '{{ mysql_units + ["oob-admin"] }}'
+        - name: Remove candidate backend overrides
+          ansible.builtin.file:
+            path: '/etc/systemd/system/{{ item }}.service.d/50-mysql.conf'
+            state: absent
+          loop: '{{ mysql_units + ["oob-admin"] }}'
+        - name: Remove backend activation file
+          ansible.builtin.file:
+            path: /etc/dobhrap-mysql.env
+            state: absent
+        - name: Restore previous management broker
+          ansible.builtin.copy:
+            src: '{{ mysql_release }}.original-admin-runner.py'
+            dest: /opt/oob-control/admin-runner.py
+            remote_src: true
+            mode: '0700'
+        - name: Restore previous application release
+          ansible.builtin.file:
+            src: '{{ mysql_old_release.stdout }}'
+            dest: /opt/dobhrap/current
+            state: link
+            force: true
+        - name: Restart previous web service
+          ansible.builtin.systemd:
+            name: oob-business.service
+            daemon_reload: true
+            state: started
+        - name: Report stopped migration
+          ansible.builtin.fail:
+            msg: Migration failed and previous release was restored. SQLite sources and MySQL candidate data are preserved. Inspect the failing task before retrying.
+      always:
+        - name: Remove write maintenance gate after success or rollback
+          ansible.builtin.file:
+            path: /var/lib/dobhrap/mysql-maintenance
+            state: absent
+        - name: Restore recurring timers
+          ansible.builtin.systemd:
+            name: '{{ item }}.timer'
+            state: started
+          loop: '{{ mysql_timers }}'
+    - name: Refresh watchdog health
+      ansible.builtin.systemd:
+        name: '{{ item }}.service'
+        state: started
+      loop: [oob-watchdog, oob-gateway-watchdog]
+    - name: Report completed migration
+      ansible.builtin.debug:
+        msg: 'MySQL cutover passed database-backed HTTPS checks. SQLite files were retained. Verification and snapshot locations: /var/lib/dobhrap/mysql-migration.json'
+
+- import_playbook: watchdog-continuous-oob.yml
