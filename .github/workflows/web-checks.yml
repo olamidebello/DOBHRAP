@@ -49,9 +49,13 @@ jobs:
           npm install --no-save playwright@1.56.1 jsdom@26
           npx playwright install --with-deps chromium
       - name: Check analyst pricing and return management interactions
-        run: node tests/tax-management-ui.cjs
+        run: |
+          node tests/tax-management-ui.cjs
+          node tests/wallet-ui.cjs
       - name: Check federal return suite deployment syntax
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-filing-suite-oob.yml
+      - name: Check wallet deployment syntax
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/wallet-marketplace-oob.yml
       - name: Start synthetic test server
         run: |
           python tests/browser_fixture.py > /tmp/oob-browser-server.log 2>&1 &

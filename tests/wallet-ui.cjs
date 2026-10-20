@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),{randomUUID}=require('node:crypto'),{JSDOM}=require('jsdom');
+(async()=>{
+ const d=new JSDOM('<header><button id="logout"></button></header><div id="content"></div>',{runScripts:'outside-only',url:'https://example.test/'}),w=d.window,calls=[];
+ w.content=w.document.querySelector('#content');w.userRole='super_admin';w.modules={};w.intlCatalog={currencies:[{id:'USD'}]};w.esc=v=>String(v??'').replaceAll('<','&lt;').replaceAll('"','&quot;');w.formatMoneyMinor=(n,c)=>c+' '+(n/100).toFixed(2);w.localizedDate=String;w.title=String;w.message=()=>{};w.table=(rows,keys)=>'<table>'+rows.map(r=>'<tr>'+keys.map(k=>'<td>'+w.esc(r[k])+'</td>').join('')+'</tr>').join('')+'</table>';w.t=v=>v;w.show=async()=>{};w.crypto.randomUUID=randomUUID;
+ let pending=Promise.resolve(),balance=1000;w.safeRun=fn=>(pending=Promise.resolve().then(fn));
+ w.api=async(route,body)=>{calls.push({route,body});if(route==='wallet/status')return {balances:[{currency:'USD',balance}],entries:[],notice:'Store credit'};if(route==='platform/wallet/overview')return {users:[{id:2,email:'synthetic@example.com',workspace:'Example'}],balances:[],entries:[]};if(route==='platform/wallet/credit')return {id:'credit',reused:false};if(route==='market/status')return {environment:'live',notice:'',store:{name:'Store',description:'',support_email:'',open:true},gateways:[]};if(route==='market/products')return [{id:'offer',name:'Session',description:'Test',service_code:'tax_analyst_session',amount:500,currency:'USD',active:1}];if(route==='market/checkout'){balance-=500;return {id:'order',state:'fulfilled'}};throw Error(route)};
+ w.eval(fs.readFileSync('wallet.js','utf8'));w.eval(fs.readFileSync('workspace.js','utf8'));w.safeRun=fn=>(pending=Promise.resolve().then(fn));
+ await w.refreshWalletBadge();assert.match(w.document.querySelector('#wallet-balance-button').textContent,/USD 10.00/);
+ await w.showWalletAdmin();const form=w.document.querySelector('#wallet-credit');form.elements.amount.value='10.00';form.elements.reason.value='Approved synthetic credit';form.dispatchEvent(new w.Event('submit',{cancelable:true}));await pending;
+ const credit=calls.find(c=>c.route==='platform/wallet/credit');assert.equal(credit.body.owner,2);assert.equal(credit.body.amount,'10.00');assert(credit.body.request_key);
+ await w.showMarketplace('marketplace');const button=w.document.querySelector('[data-gateway=wallet]');assert(button&&!button.disabled);button.click();await pending;
+ assert.equal(calls.find(c=>c.route==='market/checkout').body.gateway,'wallet');assert.equal(calls.find(c=>c.route==='market/checkout').body.product_id,'offer');
+ await w.refreshWalletBadge();assert.match(w.document.querySelector('#wallet-balance-button').textContent,/USD 5.00/);w.close();console.log('Wallet GUI credit, balance and purchase interactions passed');
+})().catch(e=>{console.error(e);process.exit(1)});

@@ -1,0 +1,26 @@
+---
+- import_playbook: tax-filing-suite-oob.yml
+
+- name: Verify user balances and wallet checkout deployment
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify wallet tables in the active backend without changing balances
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/check-wallet.py]
+      changed_when: false
+    - name: Verify user and administrator wallet interface is served
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/wallet.js
+        return_content: true
+      register: wallet_gui
+      failed_when: "'platform/wallet/credit' not in wallet_gui.content or 'wallet/status' not in wallet_gui.content"
+      changed_when: false
+    - name: Report account balance controls
+      ansible.builtin.debug:
+        msg:
+          - 'Super admin > User balances & manual credits: select a user, currency, amount and audited reason.'
+          - 'Users see account balance in the header, Account balance page and marketplace.'
+          - 'Pay from balance supports any eligible one-time offer or prepaid plan in the same currency, including Tax Analyst and tax-year preparation.'
+          - 'No balances were credited and no purchases were made by this deployment.'

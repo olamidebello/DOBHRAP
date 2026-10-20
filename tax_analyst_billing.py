@@ -1,7 +1,8 @@
-"""One verified live purchase buys one successful document-analysis session."""
+"""One verified live or wallet purchase buys one successful document-analysis session."""
 import time
 from contextlib import contextmanager
 import advanced as a
+import wallet
 
 CODE='tax_analyst_session'
 PRODUCT='tax-analyst-session'
@@ -12,10 +13,10 @@ def initialize(c):
 
 def sync(c,tid,owner):
  # Test-mode payments, pending orders and browser redirects cannot grant access.
- rows=c.execute("SELECT o.id,o.created FROM market_orders o JOIN market_services s ON s.order_id=o.id WHERE o.owner=? AND o.tenant_id=? AND o.service_code=? AND s.service_code=? AND o.environment='live' AND s.environment='live' AND o.state='fulfilled' AND s.status='active' AND s.work_state!='suspended' AND o.currency='USD' AND o.amount>=50",(owner,tid,CODE,CODE)).fetchall()
+ rows=c.execute("SELECT o.id,o.created FROM market_orders o JOIN market_services s ON s.order_id=o.id WHERE o.owner=? AND o.tenant_id=? AND o.service_code=? AND s.service_code=? AND ((o.environment='live' AND s.environment='live') OR (s.environment='wallet' AND "+wallet.PAID+")) AND o.state='fulfilled' AND s.status='active' AND s.work_state!='suspended' AND o.currency='USD' AND o.amount>=50",(owner,tid,CODE,CODE)).fetchall()
  for r in rows:c.execute("INSERT OR IGNORE INTO tax_analyst_sessions(order_id,tenant_id,owner,state,created,updated) VALUES(?,?,?,'available',?,?)",(r['id'],tid,owner,r['created'],int(time.time())))
 
-def eligible_sql():return " FROM tax_analyst_sessions x JOIN market_orders o ON o.id=x.order_id JOIN market_services s ON s.order_id=x.order_id WHERE x.tenant_id=? AND x.owner=? AND o.state='fulfilled' AND o.environment='live' AND s.environment='live' AND o.service_code='tax_analyst_session' AND s.service_code='tax_analyst_session' AND s.status='active' AND s.work_state!='suspended'"
+def eligible_sql():return " FROM tax_analyst_sessions x JOIN market_orders o ON o.id=x.order_id JOIN market_services s ON s.order_id=x.order_id WHERE x.tenant_id=? AND x.owner=? AND o.state='fulfilled' AND ((o.environment='live' AND s.environment='live') OR (s.environment='wallet' AND "+wallet.PAID+")) AND o.service_code='tax_analyst_session' AND s.service_code='tax_analyst_session' AND s.status='active' AND s.work_state!='suspended'"
 
 def status(c,tid,user):
  sync(c,tid,user['id']);counts={r['state']:r['n'] for r in c.execute('SELECT x.state,count(*) n'+eligible_sql()+' GROUP BY x.state',(tid,user['id']))}
@@ -63,8 +64,8 @@ def pricing(c,method,body,user):
   # Do not mutate outstanding orders or previously purchased sessions.
   if c.execute('UPDATE market_products SET amount=?,active=? WHERE id=? AND amount=? AND active=?',(price,int(active),PRODUCT,body.get('expected_price_cents'),int(body.get('expected_active',False)))).rowcount!=1:raise a.ServiceError('Price changed; reload pricing',409)
   a.audit(c,user['id'],'Tax analyst session price/availability updated')
- for pair in c.execute("SELECT DISTINCT tenant_id,owner FROM market_orders WHERE service_code='tax_analyst_session' AND environment='live' AND state='fulfilled' LIMIT 500").fetchall():sync(c,pair['tenant_id'],pair['owner'])
- return {'product':dict(c.execute('SELECT * FROM market_products WHERE id=?',(PRODUCT,)).fetchone()),'sessions':[dict(r) for r in c.execute('SELECT order_id,tenant_id,owner,state,document_id,created,updated FROM tax_analyst_sessions ORDER BY updated DESC LIMIT 200')],'notice':'One successful document analysis per live-paid session. Test payments and coupons do not grant paid analyst sessions. Super administrators are exempt for platform operations.'}
+ for pair in c.execute("SELECT DISTINCT tenant_id,owner FROM market_orders WHERE service_code='tax_analyst_session' AND environment IN ('live','wallet') AND state='fulfilled' LIMIT 500").fetchall():sync(c,pair['tenant_id'],pair['owner'])
+ return {'product':dict(c.execute('SELECT * FROM market_products WHERE id=?',(PRODUCT,)).fetchone()),'sessions':[dict(r) for r in c.execute('SELECT order_id,tenant_id,owner,state,document_id,created,updated FROM tax_analyst_sessions ORDER BY updated DESC LIMIT 200')],'notice':'One successful document analysis per live-paid or wallet-paid session. Test payments and coupons do not grant paid analyst sessions. Super administrators are exempt for platform operations.'}
 
 def session_action(c,body,user):
  if user['role']!='super_admin':raise a.ServiceError('Super administrator required',403)

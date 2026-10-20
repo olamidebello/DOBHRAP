@@ -17,6 +17,7 @@ import tax_filing
 import tax_analyst_billing
 import tax_services
 import coupons
+import wallet
 import attendance
 DB=os.environ.get('DOBHRAP_DB','data/dobhrap.db')
 MYSQL_MAINTENANCE=Path('/etc/dobhrap-mysql-maintenance')
@@ -113,6 +114,7 @@ def init():
   c.execute("CREATE TABLE IF NOT EXISTS platform_state(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
   initialize_business(c)
   marketplace.initialize(c)
+  wallet.initialize(c)
   coupons.initialize(c)
   tax_analyst_billing.initialize(c)
   provider_settings.initialize(c)
@@ -202,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/wallet.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -271,6 +273,8 @@ class Handler(BaseHTTPRequestHandler):
      result=password_reset.authenticated(c,u,body,admin=path.endswith('/admin'));c.commit();self.reply(200,result);return
     intl_result=international.dispatch(path,self.command,body,c,u)
     if intl_result is not None:c.commit();self.reply(200,intl_result);return
+    wallet_result=wallet.admin(path,self.command,body,c,u)
+    if wallet_result is not None:c.commit();self.reply(200,wallet_result);return
     analyst_control_result=tax_analyst_control.dispatch(path,self.command,body,c,u)
     if analyst_control_result is not None:c.commit();self.reply(200,analyst_control_result);return
     settings_result=provider_settings.dispatch(path,self.command,body,c,u)
@@ -310,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
     tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tenant_id,)).fetchone()
     if not tenant:self.reply(404,{'error':'Workspace not found'});return
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
+    if path=='/api/wallet/status' and self.command=='GET':self.reply(200,wallet.status(c,u));return
     if path=='/api/tax-analyst/billing' and self.command=='GET':
      result=tax_analyst_billing.status(c,tenant_id,u);c.commit();self.reply(200,result);return
     marketplace.refresh_subscriptions(c)

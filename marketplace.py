@@ -129,6 +129,7 @@ def checkout_url(value,gateway):
 def checkout(c,body,user,tenant_id):
     require_open(c)
     if not enabled():raise a.ServiceError('Marketplace checkout is disabled',503)
+    if body.get('gateway')=='wallet':return __import__('wallet').checkout(c,body,user,tenant_id)
     gateway=body.get('gateway');key(gateway);env=environment()
     request_key=str(uuid.UUID(str(body.get('request_key',''))))
     product=c.execute('SELECT * FROM market_products WHERE id=? AND active=1',(body.get('product_id'),)).fetchone()
@@ -305,8 +306,9 @@ def dispatch(path,method,body,c,user,tenant_id):
         if body.get('work_state') not in ('new','in_progress','completed','suspended'):raise a.ServiceError('Invalid fulfillment state')
         if c.execute("SELECT 1 FROM market_subscriptions WHERE order_id=? AND state!='active'",(body.get('order_id'),)).fetchone():raise a.ServiceError('Expired or cancelled subscription cannot be reactivated through fulfillment',409)
         if not c.execute('SELECT 1 FROM market_services WHERE order_id=?',(body.get('order_id'),)).fetchone():raise a.ServiceError('Service not found',404)
-        c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment IN (\'live\',\'coupon\') THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
+        c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment IN (\'live\',\'coupon\',\'wallet\') THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
         a.audit(c,user['id'],'Marketplace fulfillment updated '+str(body.get('order_id')));return {'ok':True}
+    if route=='checkout' and method=='POST' and body.get('gateway')=='wallet':return checkout(c,body,user,tenant_id)
     if user['role'] not in ('admin','super_admin'):
         analyst_order=(route=='checkout' and c.execute("SELECT 1 FROM market_products WHERE id=? AND service_code='tax_analyst_session'",(body.get('product_id'),)).fetchone()) or (route=='verify' and c.execute("SELECT 1 FROM market_orders WHERE id=? AND owner=? AND tenant_id=? AND service_code='tax_analyst_session'",(body.get('id'),user['id'],tenant_id)).fetchone())
         if user['role']!='editor' or not analyst_order:raise a.ServiceError('Workspace administrator required to purchase this service',403)

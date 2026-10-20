@@ -2,13 +2,14 @@
 import re
 import advanced as a
 import tax_preparation as prep
+import wallet
 
 def initialize(c):
  if 'service_mode' not in {r[1] for r in c.execute('PRAGMA table_info(tenants)')}:
   c.execute("ALTER TABLE tenants ADD COLUMN service_mode TEXT NOT NULL DEFAULT 'business'")
 
 def paid(c,tenant_id,owner,y,service='preparation'):
- return bool(c.execute("SELECT 1 FROM market_services s JOIN market_orders o ON o.id=s.order_id WHERE s.tenant_id=? AND o.owner=? AND s.service_code=? AND ((s.environment='live' AND o.environment='live') OR (s.environment='coupon' AND o.environment='coupon' AND o.gateway='coupon' AND EXISTS(SELECT 1 FROM coupon_redemptions r WHERE r.order_id=o.id AND r.owner=o.owner AND r.tenant_id=o.tenant_id))) AND s.status='active' AND s.work_state!='suspended' AND o.state='fulfilled'",(tenant_id,owner,'tax_'+service+'_'+str(y))).fetchone())
+ return bool(c.execute("SELECT 1 FROM market_services s JOIN market_orders o ON o.id=s.order_id WHERE s.tenant_id=? AND o.owner=? AND s.service_code=? AND ((s.environment='live' AND o.environment='live') OR (s.environment='wallet' AND "+wallet.PAID+") OR (s.environment='coupon' AND o.environment='coupon' AND o.gateway='coupon' AND EXISTS(SELECT 1 FROM coupon_redemptions r WHERE r.order_id=o.id AND r.owner=o.owner AND r.tenant_id=o.tenant_id))) AND s.status='active' AND s.work_state!='suspended' AND o.state='fulfilled'",(tenant_id,owner,'tax_'+service+'_'+str(y))).fetchone())
 
 def status(c,tenant_id,user):
  years=[y for y in range(2000,2101) if paid(c,tenant_id,user['id'],y)]
