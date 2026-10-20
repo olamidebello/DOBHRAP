@@ -24,14 +24,14 @@ class ServiceError(Exception):
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs): return None
 
-def request_json(url, payload=None, headers=None, method=None):
+def request_json(url, payload=None, headers=None, method=None, timeout=30):
     # Configured, server-owned hosts only; no URLs supplied by browser callers.
     if not url.startswith('https://'): raise ServiceError('Provider URL must use HTTPS', 503)
     hdr = {'Content-Type': 'application/json', **(headers or {})}
     req = Request(url, data=json.dumps(payload).encode() if payload is not None else None,
                   headers=hdr, method=method)
     try:
-        with build_opener(NoRedirect).open(req, timeout=30) as response:
+        with build_opener(NoRedirect).open(req, timeout=timeout) as response:
             raw = response.read(4_000_001)
             if len(raw) > 4_000_000: raise ServiceError('Provider response too large', 502)
             return json.loads(raw)
@@ -349,4 +349,5 @@ def record_locked(c, module, record_id):
     for row in c.execute("SELECT payload FROM workflows WHERE kind=? AND state NOT IN ('draft','pending_approval','cancelled','rejected','blocked')",(kind,)):
         if unseal(row['payload']).get('record_id')==int(record_id):return True
     return False
+
 

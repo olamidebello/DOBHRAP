@@ -89,3 +89,23 @@ status also blocks a projection when no W-2 income has been entered. Unavailable
 data are not inferred from bank deposits or replaced by a recommended refund.
 
 IRS missing-form guidance: https://www.irs.gov/forms-pubs/about-form-4852.
+
+## Upload events and IRS analysis report
+
+Deploy the complete workflow on the existing server:
+
+```bash
+cd /opt/dobhrap-watchdog-source
+git pull --ff-only origin main
+sudo ansible-playbook -i 'dobhrap,' -c local ansible/tax-upload-events-oob.yml
+```
+
+An upload with `auto_analyze: true` and explicit `consent: true` inserts the new document and its queue job in the same transaction. Only that new document is queued; old uploads and failures are untouched. Upload without consent remains private/manual. The existing timer processes one job per run. PDFs, PNGs and JPEGs follow the same full-document prompt requesting page/line evidence and omission warnings. The model can omit or misread lines; source coverage is never certified automatically. Existing 2 MB/file and 150-record/200-field limits remain in force. Split larger documents and reconcile their totals manually.
+
+The analysis report shows proposed IRS forms/categories, original document/entry references, amounts/currencies, approval state, business-use allocation and category-specific eligibility questions. Users can correct each proposed category in the record editor and download JSON or a spreadsheet-safe CSV worksheet. Suggestions remain unapproved; a similar merchant description alone cannot establish business purpose or deductibility. Personal and transfer records remain excluded. Missing facts remain unresolved.
+
+The new playbook fetches fixed public IRS pages (never taxpayer data), stores public reference availability, timestamps, hashes and small excerpts in `/var/lib/oob-irs-references/status.json`, and installs a weekly refresh timer. Future extraction prompts receive these public excerpts as supplementary reference material; cached page text does not establish taxpayer eligibility. The report links to those references. This refresh does not automatically validate or update executable tax law: mappings currently reference 2025 instructions or general IRS form guidance. The report also creates partial draft 2025 IRS line worksheets for supported boxes and candidate Schedule C destinations; only approved supported tax fields receive numeric field totals. These totals still require duplicate reconciliation. Other tax years carry an explicit revision warning. Failed refreshes remain visible; checking a URL is not certification of eligibility. No arbitrary web URLs from uploads or model outputs are fetched.
+
+Compile approved records retains the report in its encrypted snapshot and creates the existing linked preparation draft. Supported approved W-2/1099-INT/1099-DIV fields map to the income interview; reviewed business transactions become business intake totals. Candidate Schedule C/A/E, depreciation, education and other form destinations remain worksheets requiring manual completion and eligibility/limitation calculations. The system does not create every official IRS form, certify a filing-ready return, guarantee a refund, or transmit an IRS filing. Personal identity fields remain outside AI-extracted fields.
+
+Document extraction uses a bounded 120-second provider timeout (other providers retain 30 seconds), below the worker's 180-second service deadline. Safe error notices expose HTTP status or failure class, never provider bodies, API keys or document text. An HTTP 200 model lookup does not verify Responses API quota or document processing. No deployment test makes a paid request; failed work is never automatically retried.

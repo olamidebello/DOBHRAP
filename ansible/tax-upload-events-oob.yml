@@ -1,0 +1,70 @@
+---
+- import_playbook: tax-analysis-automation-oob.yml
+
+- name: Configure upload events and IRS analysis reports
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create dedicated public reference cache
+      ansible.builtin.file:
+        path: /var/lib/oob-irs-references
+        state: directory
+        owner: dobhrap-app
+        group: dobhrap-app
+        mode: '0750'
+    - name: Refresh public IRS reference snapshots without taxpayer data
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/refresh-irs-references.py, /var/lib/oob-irs-references/status.json]
+    - name: Install weekly official-reference refresh service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-irs-references.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Refresh public IRS preparation references
+          After=network-online.target
+          [Service]
+          Type=oneshot
+          User=dobhrap-app
+          Group=dobhrap-app
+          WorkingDirectory=/opt/dobhrap/current
+          ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/ansible/refresh-irs-references.py /var/lib/oob-irs-references/status.json
+          StateDirectory=oob-irs-references
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+    - name: Install weekly reference refresh timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-irs-references.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Check official IRS references weekly
+          [Timer]
+          OnCalendar=weekly
+          Persistent=true
+          RandomizedDelaySec=3600
+          [Install]
+          WantedBy=timers.target
+    - name: Enable official-reference refresh
+      ansible.builtin.systemd:
+        name: oob-irs-references.timer
+        daemon_reload: true
+        state: started
+        enabled: true
+    - name: Verify report interface is served
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/tax-analyst.js
+        return_content: true
+      register: tax_report_gui
+      failed_when: "'analysis-report' not in tax_report_gui.content or 'auto_analyze:auto' not in tax_report_gui.content"
+      changed_when: false
+    - name: Report installed workflow
+      ansible.builtin.debug:
+        msg:
+          - 'Consented uploads enqueue their own document atomically. The existing bounded worker processes one document per run.'
+          - 'Analysis report includes source evidence, candidate IRS destinations, eligibility questions, references and JSON/CSV exports.'
+          - 'Compile approved records integrates supported fields into preparation; other forms require manual completion and selected-year review.'
+          - 'No paid extraction was run by deployment. Existing failed documents are not automatically retried.'
