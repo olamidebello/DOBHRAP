@@ -6,7 +6,7 @@ import app, advanced as a, tax_analyst as t, tax_preparation as prep
 class TaxAnalystTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.old=app.DB;app.DB=self.tmp.name+'/db.sqlite';self.user={'id':1,'role':'admin'}
-  self.env=patch.dict(os.environ,{'DOBHRAP_ADMIN_PASSWORD':'test-password-123456','DOBHRAP_ENCRYPTION_KEY':Fernet.generate_key().decode(),'DOBHRAP_ENABLE_TAX_ANALYST':'0'});self.env.start();app.init()
+  self.env=patch.dict(os.environ,{'DOBHRAP_ADMIN_PASSWORD':'test-password-123456','DOBHRAP_ENCRYPTION_KEY':Fernet.generate_key().decode(),'DOBHRAP_ENABLE_TAX_ANALYST':'0'});self.env.start();app.init();__import__('tests.tax_billing_fixture',fromlist=['grant']).grant()
  def tearDown(self):self.env.stop();app.DB=self.old;self.tmp.cleanup()
  def call(self,route,body=None,user=None):
   with app.connect() as c:return t.dispatch('/api/tax-analyst/'+route,'GET' if body is None else 'POST',body or {},c,user or self.user)
@@ -87,5 +87,6 @@ class TaxAnalystTests(unittest.TestCase):
  def test_existing_tenant_migration(self):
   with app.connect() as c:tenant=app.register_workspace(c,{'company':'Fixture tenant','email':'tenant@example.com','password':'test-password-123456','confirm_password':'test-password-123456'})['tenant_id']
   with app.tenant_connect(tenant) as c:c.execute('DROP TABLE tax_analyst_documents')
-  app.init()
+  app.init();__import__('tests.tax_billing_fixture',fromlist=['grant']).grant()
   with app.tenant_connect(tenant) as c:self.assertIsNotNone(c.execute("SELECT name FROM sqlite_master WHERE name='tax_analyst_documents'").fetchone())
+

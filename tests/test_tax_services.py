@@ -37,6 +37,7 @@ class TaxServiceTests(unittest.TestCase):
   tid,client,csrf=self.account()
   with app.connect() as c:
    for pid,code in [('tax','tax_preparation_2026'),('business','hosting')]:c.execute('INSERT INTO market_products VALUES(?,?,?,?,?,?,?)',(pid,pid,'fixture',code,1000,'USD',1))
-  self.assertEqual([p['id'] for p in self.request('/api/market/products',client=client)],['tax'])
+  self.assertEqual({p['id'] for p in self.request('/api/market/products',client=client)},{'tax','tax-analyst-session'})
   with self.assertRaises(HTTPError) as e:self.request('/api/market/checkout',{'product_id':'business','gateway':'stripe','request_key':str(uuid.uuid4())},client,csrf)
   self.assertEqual(e.exception.code,403)
+

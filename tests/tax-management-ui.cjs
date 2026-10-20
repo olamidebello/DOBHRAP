@@ -1,0 +1,23 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {JSDOM}=require('jsdom');
+(async()=>{
+ const dom=new JSDOM('<div id="content"></div>',{runScripts:'outside-only',url:'https://example.test/'}),w=dom.window,calls=[];
+ w.content=w.document.querySelector('#content');w.userRole='super_admin';w.esc=v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');w.title=v=>v.replaceAll('_',' ');w.localizedDate=String;w.formatMoneyMinor=(v,c)=>c+' '+(v/100).toFixed(2);w.table=(rows,keys)=>'<table>'+rows.map(r=>'<tr>'+keys.map(k=>'<td>'+w.esc(r[k])+'</td>').join('')+'</tr>').join('')+'</table>';w.goButtons=()=>{};w.message=()=>{};w.show=async()=>{};w.confirm=()=>true;
+ let pending=Promise.resolve();w.safeRun=fn=>(pending=Promise.resolve().then(fn));
+ const policy={analysis_enabled:true,uploads_enabled:true,queue_enabled:true,worker_enabled:true,returns_enabled:true,daily_requests:100,document_limit:100,max_file_bytes:2000000,years:[2025,2026],return_types:['1040','1065','1120-S','1120']};
+ const catalog=['1040','1065','1120-S','1120'].map(form=>({form,title:form,years:[2025,2026],url:'https://www.irs.gov/',calculation_support:'Partial',official_form_completion:false}));
+ const settings={policy,revision:1,catalog,resources:{},provider:{key_configured:true,model:'synthetic-model',analysis_enabled:true}};
+ const product={amount:500,active:1};
+ const item={id:'return-1',year:2025,form:'1040',revision:1,state:'draft',data:{name:'Example',taxpayer_name:'Example',owners:[]},review:{notice:'Draft only',worksheets:[],owner_allocations:[],blockers:['Not ready'],required_forms:['1040'],conditional_forms:['Schedule C']}};
+ w.api=async(route,body)=>{calls.push({route,body});if(route==='platform/tax-analyst/settings'){if(body){Object.assign(policy,body.policy);settings.revision++}return settings}if(route==='platform/tax-analyst/overview')return {workspaces:[],audit:[]};if(route==='platform/tax-analyst/pricing'){if(body){product.amount=body.price_cents;product.active=Number(body.active)}return {product,sessions:[],notice:'One completed document per session'}}if(route==='tax-filing/catalog')return {catalog,policy,resources:{}};if(route==='tax-filing/list')return [item];if(route==='tax-analyst/list')return {builds:[]};if(route==='tax-filing/open')return item;if(route==='tax-filing/save'){item.data=body.data;item.revision++;return item}throw Error('Unexpected route '+route)};
+ w.eval(fs.readFileSync('tax-management.js','utf8'));
+ await w.showTaxAnalystAdmin();assert.equal(w.document.querySelector('#analyst-pricing [name=price]').value,'5.00');
+ w.document.querySelector('#analyst-pricing [name=price]').value='7.50';w.document.querySelector('#analyst-pricing').dispatchEvent(new w.Event('submit',{cancelable:true}));await pending;
+ const price=calls.find(c=>c.route==='platform/tax-analyst/pricing'&&c.body);assert.equal(price.body.price_cents,750);assert.equal(price.body.expected_price_cents,500);
+ w.document.querySelector('#analyst-admin-pause').click();await pending;assert.equal(calls.filter(c=>c.route==='platform/tax-analyst/settings'&&c.body).at(-1).body.policy.analysis_enabled,false);
+ await w.showFederalReturns();w.document.querySelector('[data-federal-open]').click();await pending;
+ const form=w.document.querySelector('#federal-input');assert(form);form.elements.gross_receipts.value='50000';form.elements.expense_supplies.value='10000';form.elements.no_special_se_rules.checked=true;form.dispatchEvent(new w.Event('submit',{cancelable:true}));await pending;
+ const saved=calls.find(c=>c.route==='tax-filing/save');assert.equal(saved.body.id,'return-1');assert.equal(saved.body.revision,1);assert.equal(saved.body.data.gross_receipts,'50000');assert.equal(saved.body.data.expense_supplies,'10000');assert.equal(saved.body.data.no_special_se_rules,true);
+ await w.taxCleanup();w.close();console.log('Tax management UI interactions passed');
+})().catch(error=>{console.error(error);process.exit(1)});

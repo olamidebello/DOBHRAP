@@ -5,12 +5,17 @@ import advanced as a
 import provider_settings as settings
 import tax_preparation as prep
 import tax_analysis_report as reports
+import tax_analyst_control as controls
+import tax_analyst_billing as billing
 
 KINDS=['unknown','income','expense','transfer','personal']
 DOCUMENT_TYPES=['auto','bank_statement','receipt','W-2','1099-INT','1099-DIV','1099-NEC','1099-MISC','1099-K','1099-R','SSA-1099','1099-B','1098','1098-T','1098-E','1095-A','Schedule K-1','prior_year_return','estimated_tax','charity','business_records','other_tax_document']
 CATEGORIES=['unclassified','wages','interest','dividend','other_income','business_income','business_expense','personal','transfer']
 
 def queue_analysis(c,body,user):
+ billing.require_credit(user)
+ policy=controls.policy()
+ if not policy['analysis_enabled'] or not policy['queue_enabled']:raise a.ServiceError('Tax analyst queuing is paused by the super administrator',403)
  if body.get('consent') is not True:raise a.ServiceError('Confirm authority and consent to send full documents to OpenAI')
  if settings.get('DOBHRAP_ENABLE_TAX_ANALYST')!='1' or not settings.get('OPENAI_API_KEY') or not (settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL')):raise a.ServiceError('Configure the existing OpenAI key and document model in Provider provisioning & keys',503)
  y=year(body.get('year'));now=int(time.time());queued=0
@@ -25,6 +30,8 @@ def queue_analysis(c,body,user):
  return {'queued':queued,'notice':'Documents process sequentially in the background. Review extracted entries and source coverage. Failed analyses are not retried automatically.'}
 
 def process_analysis(c,allowed_owners,limit=1):
+ policy=controls.policy()
+ if not policy['worker_enabled'] or not policy['analysis_enabled']:return 0
  if settings.get('DOBHRAP_ENABLE_TAX_ANALYST')!='1' or not settings.get('OPENAI_API_KEY') or not (settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL')):return 0
  now=int(time.time())
  c.execute("UPDATE tax_analysis_jobs SET state='interrupted',finished=? WHERE state='running' AND started<?",(now,now-600));c.commit()
@@ -174,7 +181,7 @@ def dispatch(path,method,body,c,user):
  if route=='list' and method=='GET':
   docs=[public(r,a.unseal(r['payload'])) for r in c.execute('SELECT * FROM tax_analyst_documents WHERE owner=? ORDER BY created DESC',(user['id'],))]
   builds=[{'id':r['id'],'year':r['year'],'created':r['created'],**a.unseal(r['payload'])} for r in c.execute('SELECT * FROM tax_analyst_builds WHERE owner=? ORDER BY created DESC',(user['id'],))]
-  return {**prep.year_catalog(),'documents':docs,'builds':builds,'automation_jobs':[dict(j) for j in c.execute('SELECT id,document_id,revision,state,requested,started,finished FROM tax_analysis_jobs WHERE owner=? ORDER BY requested DESC LIMIT 100',(user['id'],))],'groups':group_documents(docs),'kinds':KINDS,'categories':CATEGORIES,'irs_candidates':list(reports.CANDIDATES),'document_types':DOCUMENT_TYPES,'ai_enabled':settings.get('DOBHRAP_ENABLE_TAX_ANALYST')=='1' and bool(settings.get('OPENAI_API_KEY')) and bool(settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL'))}
+  return {**prep.year_catalog(),'documents':docs,'builds':builds,'automation_jobs':[dict(j) for j in c.execute('SELECT id,document_id,revision,state,requested,started,finished FROM tax_analysis_jobs WHERE owner=? ORDER BY requested DESC LIMIT 100',(user['id'],))],'groups':group_documents(docs),'kinds':KINDS,'categories':CATEGORIES,'irs_candidates':list(reports.CANDIDATES),'document_types':DOCUMENT_TYPES,'policy':{k:v for k,v in controls.policy().items() if k in ('analysis_enabled','uploads_enabled','queue_enabled','worker_enabled','daily_requests','max_file_bytes','document_limit')},'ai_enabled':controls.policy()['analysis_enabled'] and settings.get('DOBHRAP_ENABLE_TAX_ANALYST')=='1' and bool(settings.get('OPENAI_API_KEY')) and bool(settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL'))}
  if method!='POST':raise a.ServiceError('Analyst route not found',404)
  if route=='queue-analysis':return queue_analysis(c,body,user)
  if route=='cancel-analysis':
@@ -184,21 +191,38 @@ def dispatch(path,method,body,c,user):
  if route=='automation-summary':
   y=year(body.get('year'));docs=[public(r,a.unseal(r['payload'])) for r in c.execute('SELECT * FROM tax_analyst_documents WHERE owner=? AND year=?',(user['id'],y))]
   return automation_summary(docs,y)
+ if route=='retry-analysis':
+  billing.require_credit(user)
+  policy=controls.policy()
+  if not policy['analysis_enabled'] or not policy['queue_enabled']:raise a.ServiceError('Analysis queuing is paused',403)
+  if body.get('consent') is not True:raise a.ServiceError('Confirm consent for a new paid request')
+  c.execute('BEGIN IMMEDIATE');r,p=read(c,body.get('id'),user)
+  if r['state']!='failed' or p.get('records') or p.get('tax_fields'):raise a.ServiceError('Only failed documents without records can be retried',409)
+  now=int(time.time())
+  if now-r['requested']<300:raise a.ServiceError('Wait at least five minutes after the last request',429)
+  if c.execute('SELECT count(*) FROM tax_analyst_runs WHERE owner=? AND requested>?',(user['id'],now-86400)).fetchone()[0]>=policy['daily_requests']:raise a.ServiceError('Daily analyst request limit reached',429)
+  if c.execute("UPDATE tax_analyst_documents SET state='uploaded',revision=revision+1 WHERE id=? AND owner=? AND revision=?",(r['id'],user['id'],body.get('revision'))).rowcount!=1:raise a.ServiceError('Document changed; reload first',409)
+  c.execute('INSERT INTO tax_analysis_jobs(id,document_id,owner,revision,requested) VALUES(?,?,?,?,?)',(str(uuid.uuid4()),r['id'],user['id'],r['revision']+1,now))
+  a.audit(c,user['id'],'Owner explicitly requeued failed tax analysis '+r['id']);r,p=read(c,r['id'],user);return public(r,p)
  if route=='analysis-report':
   y=year(body.get('year'));docs=[public(r,a.unseal(r['payload'])) for r in c.execute('SELECT * FROM tax_analyst_documents WHERE owner=? AND year=? ORDER BY created,id',(user['id'],y))]
   return reports.build(docs,y)
  if route=='upload':
+  billing.require_credit(user)
+  policy=controls.policy()
+  if not policy['uploads_enabled']:raise a.ServiceError('Tax analyst uploads are paused',403)
   c.execute('BEGIN IMMEDIATE')
   if body.get('auto_analyze') is True:
+   if not policy['analysis_enabled'] or not policy['queue_enabled']:raise a.ServiceError('Tax analyst queuing is paused',403)
    if body.get('consent') is not True:raise a.ServiceError('Consent is required for upload-triggered analysis')
    if settings.get('DOBHRAP_ENABLE_TAX_ANALYST')!='1' or not settings.get('OPENAI_API_KEY') or not (settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL')):raise a.ServiceError('Configure document analysis before enabling upload events',503)
   y=year(body.get('year'))
   try:raw=base64.b64decode(body.get('base64',''),validate=True)
   except (ValueError,TypeError):raise a.ServiceError('Invalid document encoding') from None
   mime=body.get('type');valid={'application/pdf':raw.startswith(b'%PDF-'),'image/png':raw.startswith(b'\x89PNG\r\n\x1a\n'),'image/jpeg':raw.startswith(b'\xff\xd8\xff')}
-  if not valid.get(mime) or not 1<=len(raw)<=2_000_000:raise a.ServiceError('Upload a PDF, PNG or JPEG up to 2 MB')
+  if not valid.get(mime) or not 1<=len(raw)<=policy['max_file_bytes']:raise a.ServiceError('Upload a PDF, PNG or JPEG up to 2 MB')
   rows=c.execute('SELECT * FROM tax_analyst_documents WHERE owner=?',(user['id'],)).fetchall()
-  if len(rows)>=100 or sum(r['size'] for r in rows)+len(raw)>100_000_000:raise a.ServiceError('Private analyst storage limit reached')
+  if len(rows)>=policy['document_limit'] or sum(r['size'] for r in rows)+len(raw)>100_000_000:raise a.ServiceError('Private analyst storage limit reached')
   digest=hashlib.sha256(raw).hexdigest()
   for r in rows:
    if r['year']==y and a.unseal(r['payload'])['digest']==digest:raise a.ServiceError('This document is already uploaded for that year',409)
@@ -246,7 +270,7 @@ def dispatch(path,method,body,c,user):
   r,p=read(c,r['id'],user);return public(r,p)
  if route=='recover':
   if r['state']!='analyzing' or int(time.time())-r['requested']<600:raise a.ServiceError('Only an analysis interrupted for ten minutes can be recovered',409)
-  c.execute("UPDATE tax_analyst_documents SET state='failed',revision=revision+1 WHERE id=? AND revision=?",(r['id'],body.get('revision')));r,p=read(c,r['id'],user);return public(r,p)
+  c.execute("UPDATE tax_analyst_documents SET state='failed',revision=revision+1 WHERE id=? AND revision=?",(r['id'],body.get('revision')));c.commit();billing.release_interrupted(c,user,r['id']);r,p=read(c,r['id'],user);return public(r,p)
  if route=='analyze':return analyze_document(c,body,user,r,p)
  raise a.ServiceError('Analyst route not found',404)
 
@@ -327,20 +351,29 @@ def compile_year(c,body,user):
 
 
 def analyze_document(c,body,user,r,p):
+ policy=controls.policy()
+ if not policy['analysis_enabled']:raise a.ServiceError('Tax analyst analysis is paused',403)
  c.execute('BEGIN IMMEDIATE')
  if body.get('consent') is not True:raise a.ServiceError('Consent is required to send the full document to OpenAI')
  if settings.get('DOBHRAP_ENABLE_TAX_ANALYST')!='1' or not settings.get('OPENAI_API_KEY') or not (settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL')):raise a.ServiceError('Enable tax analyst and configure a document-capable model in the super admin provider console',503)
  if p['records'] or p.get('tax_fields'):raise a.ServiceError('Records already exist; upload a different document or edit the existing records',409)
  now=int(time.time())
  if now-r['requested']<300 or r['state']=='analyzing':raise a.ServiceError('Analysis already requested; wait or inspect the saved result',429)
- if c.execute('SELECT count(*) FROM tax_analyst_runs WHERE owner=? AND requested>?',(user['id'],now-86400)).fetchone()[0]>=100:raise a.ServiceError('Daily analyst request limit reached',429)
+ if c.execute('SELECT count(*) FROM tax_analyst_runs WHERE owner=? AND requested>?',(user['id'],now-86400)).fetchone()[0]>=policy['daily_requests']:raise a.ServiceError('Daily analyst request limit reached',429)
  if c.execute("UPDATE tax_analyst_documents SET state='analyzing',requested=?,revision=revision+1 WHERE id=? AND revision=?",(now,r['id'],body.get('revision'))).rowcount!=1:raise a.ServiceError('Document changed; reload first',409)
  c.execute('INSERT INTO tax_analyst_runs VALUES(?,?,?)',(str(uuid.uuid4()),user['id'],now));c.commit()
- try:p.update(extract(p,r['year']));p['notice']='AI extraction is unverified and may omit transactions. Reconcile against the complete original document; classify and approve each record.';state='review'
+ session_order=None
+ try:
+  session_order=billing.reserve(c,user,r['id'],r['revision'])
+  p.update(extract(p,r['year']));p['notice']='AI extraction is unverified and may omit transactions. Reconcile against the complete original document; classify and approve each record.';state='review'
  except Exception as error:
   match=re.search(r'HTTP (\d{3})',str(error)) if isinstance(error,a.ServiceError) else None
   reason=('Provider HTTP '+match.group(1)) if match else ('Provider unavailable, timeout or invalid response' if isinstance(error,a.ServiceError) and str(error).startswith('Provider response unavailable') else 'Extraction validation or parsing failed ('+type(error).__name__+')')
+  if isinstance(error,a.ServiceError) and error.status==402:reason='Purchase a Tax Analyst session before this request'
+  billing.finish(c,user,session_order,False)
   p['notice']=reason+'. No automatic paid retry. Review provider settings or document before retrying.';state='failed'
  c.execute('UPDATE tax_analyst_documents SET payload=?,state=?,revision=revision+1 WHERE id=?',(a.seal(p),state,r['id']));a.audit(c,user['id'],'Tax analyst extraction '+state)
+ c.commit()
+ if state=='review':billing.finish(c,user,session_order,True)
  r,p=read(c,r['id'],user);return public(r,p)
 

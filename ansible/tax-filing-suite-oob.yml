@@ -1,0 +1,44 @@
+---
+- import_playbook: tax-upload-events-oob.yml
+
+- name: Provision federal return resources and analyst management
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create official form resource directory
+      ansible.builtin.file:
+        path: /var/lib/oob-tax-forms
+        state: directory
+        owner: root
+        group: dobhrap-app
+        mode: '0750'
+    - name: Fetch year-specific public official forms without taxpayer data
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/prepare-tax-form-resources.py, /var/lib/oob-tax-forms]
+      register: tax_resources
+    - name: Require federal return tables in the actual live tenant backends
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/check-tax-filing-suite.py]
+      changed_when: false
+    - name: Verify analyst management and return GUI resources are served
+      ansible.builtin.uri:
+        url: 'https://olamideolatayobello.com/{{ item.path }}'
+        return_content: true
+      loop:
+        - {path: tax-management.js, marker: platform/tax-analyst/settings}
+        - {path: tax-management.js, marker: tax-filing/import-analyst}
+        - {path: workspace.js, marker: tax_analyst_admin}
+      register: tax_suite_gui
+      failed_when: item.marker not in tax_suite_gui.content
+      changed_when: false
+    - name: Report deployed return workflow and limits
+      ansible.builtin.debug:
+        msg:
+          - 'Super admin > Tax analyst management: policies, worker pause/resume, queue cancellation, provider navigation, return support and audit.'
+          - 'Tax preparation > Federal return workspaces: 2025/2026 Form 1040, 1065, 1120-S and 1120 private preparation.'
+          - 'Official forms are cached as resources. No draft or unavailable resource is treated as a final form.'
+          - 'Schedule C and regular Schedule SE worksheet calculations are partial; all return families retain filing blockers. No completed IRS return or transmission engine is installed.'
+          - 'Tax Analyst sessions are published at USD $5 by default. Existing custom prices are preserved; live verified payment is required for users.'
+          - 'Super admin > Tax analyst management includes pricing, unused-session suspension/restoration and order/gateway navigation.'
+          - 'Existing OpenAI settings are reused. No paid document extraction is invoked by this playbook.'

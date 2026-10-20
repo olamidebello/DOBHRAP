@@ -6,7 +6,7 @@ import app, advanced as a, tax_analyst as analyst, tax_analysis_report as report
 class UploadReportTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.old=app.DB;app.DB=self.temp.name+'/db'
-  self.env=patch.dict(os.environ,{'DOBHRAP_DB_BACKEND':'sqlite','DOBHRAP_ADMIN_PASSWORD':'synthetic-password-123','DOBHRAP_ENCRYPTION_KEY':Fernet.generate_key().decode(),'DOBHRAP_ENABLE_TAX_ANALYST':'1','OPENAI_API_KEY':'synthetic-key','TAX_ANALYST_MODEL':'synthetic-model'});self.env.start();app.init();self.user={'id':1,'role':'admin'}
+  self.env=patch.dict(os.environ,{'DOBHRAP_DB_BACKEND':'sqlite','DOBHRAP_ADMIN_PASSWORD':'synthetic-password-123','DOBHRAP_ENCRYPTION_KEY':Fernet.generate_key().decode(),'DOBHRAP_ENABLE_TAX_ANALYST':'1','OPENAI_API_KEY':'synthetic-key','TAX_ANALYST_MODEL':'synthetic-model'});self.env.start();app.init();__import__('tests.tax_billing_fixture',fromlist=['grant']).grant();self.user={'id':1,'role':'admin'}
  def tearDown(self):self.env.stop();app.DB=self.old;self.temp.cleanup()
  def call(self,route,body,user=None):
   with app.connect() as c:return analyst.dispatch('/api/tax-analyst/'+route,'POST',body,c,user or self.user)

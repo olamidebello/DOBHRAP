@@ -12,6 +12,9 @@ import support
 import international
 import tax_preparation
 import tax_analyst
+import tax_analyst_control
+import tax_filing
+import tax_analyst_billing
 import tax_services
 import coupons
 import attendance
@@ -64,6 +67,7 @@ def initialize_business(c):
  attendance.initialize(c)
  tax_preparation.initialize(c)
  tax_analyst.initialize(c)
+ tax_filing.initialize(c)
  for a in [('1000','Cash','asset'),('1100','Accounts receivable','asset'),('2000','Accounts payable','liability'),('3000','Equity','equity'),('4000','Sales','income'),('5000','Operating expense','expense'),('5100','Wages','expense')]: c.execute('INSERT OR IGNORE INTO accounts VALUES(?,?,?)',a)
 
 def tenant_connect(tenant_id):
@@ -110,7 +114,9 @@ def init():
   initialize_business(c)
   marketplace.initialize(c)
   coupons.initialize(c)
+  tax_analyst_billing.initialize(c)
   provider_settings.initialize(c)
+  tax_analyst_control.initialize(c)
   support.initialize(c)
   international.initialize(c)
   for tenant in c.execute('SELECT id FROM tenants WHERE id>1').fetchall():
@@ -196,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -265,6 +271,8 @@ class Handler(BaseHTTPRequestHandler):
      result=password_reset.authenticated(c,u,body,admin=path.endswith('/admin'));c.commit();self.reply(200,result);return
     intl_result=international.dispatch(path,self.command,body,c,u)
     if intl_result is not None:c.commit();self.reply(200,intl_result);return
+    analyst_control_result=tax_analyst_control.dispatch(path,self.command,body,c,u)
+    if analyst_control_result is not None:c.commit();self.reply(200,analyst_control_result);return
     settings_result=provider_settings.dispatch(path,self.command,body,c,u)
     if settings_result is not None:c.commit();self.reply(200,settings_result);return
     if path=='/api/platform/attendance':
@@ -302,6 +310,8 @@ class Handler(BaseHTTPRequestHandler):
     tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tenant_id,)).fetchone()
     if not tenant:self.reply(404,{'error':'Workspace not found'});return
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
+    if path=='/api/tax-analyst/billing' and self.command=='GET':
+     result=tax_analyst_billing.status(c,tenant_id,u);c.commit();self.reply(200,result);return
     marketplace.refresh_subscriptions(c)
     tax_services.enforce(c,path,self.command,body,tenant,u)
     if path=='/api/tax-services/status' and self.command=='GET':self.reply(200,tax_services.status(c,tenant_id,u));return
@@ -321,12 +331,14 @@ class Handler(BaseHTTPRequestHandler):
     if coupon_result is not None:c.commit();self.reply(200,coupon_result);return
     result=marketplace.dispatch(path,self.command,body,c,u,tenant_id)
     if result is not None:
-     if tenant['service_mode']=='tax_only' and path=='/api/market/products' and self.command=='GET':result=[p for p in result if __import__('re').fullmatch(r'tax_(preparation|amendment)_\d{4}',p['service_code'])]
+     if tenant['service_mode']=='tax_only' and path=='/api/market/products' and self.command=='GET':result=[p for p in result if (__import__('re').fullmatch(r'tax_(preparation|amendment)_\d{4}',p['service_code']) or p['service_code']=='tax_analyst_session')]
      c.commit();self.reply(200,result);return
     c=stack.enter_context(tenant_connect(tenant_id))
     attendance_result=attendance.admin(path,self.command,body,c,u,tenant_id)
     if attendance_result is not None:c.commit();self.reply(200,attendance_result);return
-    analyst_result=tax_analyst.dispatch(path,self.command,body,c,u)
+    filing_result=tax_filing.dispatch(path,self.command,body,c,u)
+    if filing_result is not None:c.commit();self.reply(200,filing_result);return
+    analyst_result=tax_analyst.dispatch(path,self.command,body,c,{**dict(u),'tenant_id':tenant_id})
     if analyst_result is not None:c.commit();self.reply(200,analyst_result);return
     tax_result=tax_preparation.dispatch(path,self.command,{**body,'_tenant_id':tenant_id},c,u)
     if tax_result is not None:c.commit();self.reply(200,tax_result);return
@@ -368,4 +380,5 @@ class Handler(BaseHTTPRequestHandler):
   except (ValueError,KeyError,TypeError,sqlite3.IntegrityError) as e:self.reply(400,{'error':str(e)})
 if __name__=='__main__':
  init(); ThreadingHTTPServer(('127.0.0.1',int(os.environ.get('PORT','8080'))),Handler).serve_forever()
+
 

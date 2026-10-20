@@ -16,11 +16,19 @@ def status(c,tenant_id,user):
 
 def enforce(c,path,method,body,tenant,user):
  if tenant['service_mode']!='tax_only' or user['role']=='super_admin':return
- allowed=path=='/api/me' or path=='/api/tax-services/status' or path=='/api/coupons/redeem' or path.startswith(('/api/tax-prep/','/api/tax-analyst/','/api/support/')) or path in ('/api/market/status','/api/market/products','/api/market/orders','/api/market/services','/api/market/checkout','/api/market/verify')
+ allowed=path=='/api/me' or path=='/api/tax-services/status' or path=='/api/coupons/redeem' or path.startswith(('/api/tax-prep/','/api/tax-analyst/','/api/tax-filing/','/api/support/')) or path in ('/api/market/status','/api/market/products','/api/market/orders','/api/market/services','/api/market/checkout','/api/market/verify')
  if not allowed:raise a.ServiceError('This account provides tax services only',403)
  if path in ('/api/market/checkout','/api/coupons/redeem'):
   product=c.execute('SELECT service_code FROM market_products WHERE id=? AND active=1',(body.get('product_id'),)).fetchone()
-  if not product or not re.fullmatch(r'tax_(preparation|amendment)_\d{4}',product['service_code']):raise a.ServiceError('Choose a tax preparation service for this account',403)
+  if not product or not (re.fullmatch(r'tax_(preparation|amendment)_\d{4}',product['service_code']) or product['service_code']=='tax_analyst_session'):raise a.ServiceError('Choose a tax preparation service for this account',403)
+ if path.startswith('/api/tax-filing/') and method=='POST' and path.rsplit('/',1)[-1] in ('create','save','import-analyst','export'):
+  if path.endswith('/create'):y=body.get('year')
+  else:
+   with __import__('app').tenant_connect(tenant['id']) as private:
+    row=private.execute('SELECT year FROM tax_filing_cases WHERE id=? AND owner=?',(body.get('id'),user['id'])).fetchone()
+   if not row:raise a.ServiceError('Private federal return not found',404)
+   y=row['year']
+  if type(y) is not int or not paid(c,tenant['id'],user['id'],y):raise a.ServiceError('Verified tax-year payment or coupon required',402)
  gated=method=='POST' and (path in ('/api/tax-prep/create','/api/tax-prep/amendment-create','/api/tax-prep/export','/api/tax-prep/refund-review','/api/tax-analyst/compile') or (path=='/api/tax-prep/save' and body.get('reviewed') is True))
  if path=='/api/tax-analyst/prepare-years' and method=='POST':
   years=body.get('years')
@@ -37,3 +45,4 @@ def enforce(c,path,method,body,tenant,user):
    y=draft['year']
   if type(y) is not int or not 2000<=y<=2100:raise a.ServiceError('Choose a valid tax year')
   if not paid(c,tenant['id'],user['id'],y,'amendment' if path=='/api/tax-prep/amendment-create' else 'preparation'):raise a.ServiceError('Payment required: pay or redeem a service coupon for tax preparation for '+str(y)+' and verify payment before building or exporting.',402)
+

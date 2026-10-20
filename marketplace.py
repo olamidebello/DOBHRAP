@@ -287,6 +287,7 @@ def dispatch(path,method,body,c,user,tenant_id):
             a.audit(c,user['id'],'Marketplace offer archived '+str(body['id']));return {'ok':True}
         name=str(body.get('name','')).strip();description=str(body.get('description','')).strip();code=str(body.get('service_code',''))
         amount=body.get('amount');currency=str(body.get('currency','')).upper()
+        if body.get('id')=='tax-analyst-session' and (code!='tax_analyst_session' or currency!='USD'):raise a.ServiceError('The analyst session offer must retain its USD service code')
         if not name or len(name)>120 or len(description)>2000 or not re.fullmatch('[a-z][a-z0-9_]{1,59}',code):raise a.ServiceError('Enter an offer name, description and valid service code')
         if type(amount) is not int or not 50<=amount<=100_000_000 or currency not in list_currencies() or currency in ('XTS','XXX'):raise a.ServiceError('Price must be 50–100000000 minor units in a recognized currency')
         if not isinstance(body.get('active'),bool):raise a.ServiceError('Choose whether the offer is active')
@@ -306,7 +307,9 @@ def dispatch(path,method,body,c,user,tenant_id):
         if not c.execute('SELECT 1 FROM market_services WHERE order_id=?',(body.get('order_id'),)).fetchone():raise a.ServiceError('Service not found',404)
         c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment IN (\'live\',\'coupon\') THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
         a.audit(c,user['id'],'Marketplace fulfillment updated '+str(body.get('order_id')));return {'ok':True}
-    if user['role'] not in ('admin','super_admin'):raise a.ServiceError('Workspace administrator required to purchase',403)
+    if user['role'] not in ('admin','super_admin'):
+        analyst_order=(route=='checkout' and c.execute("SELECT 1 FROM market_products WHERE id=? AND service_code='tax_analyst_session'",(body.get('product_id'),)).fetchone()) or (route=='verify' and c.execute("SELECT 1 FROM market_orders WHERE id=? AND owner=? AND tenant_id=? AND service_code='tax_analyst_session'",(body.get('id'),user['id'],tenant_id)).fetchone())
+        if user['role']!='editor' or not analyst_order:raise a.ServiceError('Workspace administrator required to purchase this service',403)
     if route=='checkout' and method=='POST':return checkout(c,body,user,tenant_id)
     if route=='verify' and method=='POST':
         row=c.execute('SELECT tenant_id FROM market_orders WHERE id=?',(body.get('id'),)).fetchone()
@@ -359,3 +362,4 @@ def seed_tax_products(c,preparation_price='49.00',amendment_price='79.00',publis
             else:created+=1
     a.audit(c,0,'Tax starter offers seeded: created '+str(created)+', updated '+str(updated)+', preserved '+str(preserved))
     return {'created':created,'updated':updated,'preserved':preserved,'currency':'USD','notice':'Editable operator starter prices, not market-price recommendations or filing fees. Existing prices are preserved unless overwrite is explicitly selected.'}
+

@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 import app
+import tax_analyst_control as controls
 
 
 def run():
@@ -13,6 +14,7 @@ def run():
     with lock_path.open('a') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:return 0
+        if not controls.policy()["worker_enabled"] or not controls.policy()["analysis_enabled"]:return 0
         with app.connect() as catalog:
             tenants=[r['id'] for r in catalog.execute("SELECT id FROM tenants WHERE status='active' ORDER BY id")]
         for tid in tenants:

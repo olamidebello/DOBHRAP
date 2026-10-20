@@ -32,6 +32,8 @@ def dispatch(path,method,body,c,user,tenant_id):
  if route!='redeem' or method!='POST':raise a.ServiceError('Coupon route not found',404)
  if user['role'] not in ('admin','super_admin'):raise a.ServiceError('Account administrator required to purchase',403)
  import marketplace as market
+ offer=c.execute('SELECT service_code FROM market_products WHERE id=?',(body.get('product_id'),)).fetchone()
+ if offer and offer['service_code']=='tax_analyst_session':raise a.ServiceError('Tax Analyst sessions require verified live payment; coupons do not apply',403)
  market.require_open(c)
  code=str(body.get('code','')).strip().upper()
  if not re.fullmatch('[A-Z0-9-]{8,80}',code):raise a.ServiceError('Coupon is invalid or unavailable')
@@ -54,3 +56,4 @@ def dispatch(path,method,body,c,user,tenant_id):
  c.execute('INSERT INTO market_services(order_id,tenant_id,service_code,name,environment,status,activated) VALUES(?,?,?,?,?,?,?)',(order,tenant_id,product['service_code'],product['name'],'coupon','active',now));a.audit(c,user['id'],'Coupon redeemed for service '+order)
  market.activate_subscription(c,order)
  return {'id':order,'state':'fulfilled','reused':False,'notice':'Service price fully covered by coupon; no gateway charge.'}
+

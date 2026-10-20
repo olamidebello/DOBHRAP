@@ -8,6 +8,8 @@ import tax_automation_worker as worker
 
 
 class TaxWorkerLockTests(unittest.TestCase):
+    def setUp(self):
+        mocked=patch.object(worker.controls,"policy",return_value={"worker_enabled":True,"analysis_enabled":True});mocked.start();self.addCleanup(mocked.stop)
     def test_lock_uses_runtime_directory_not_database_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             db=MagicMock();db.__enter__.return_value=db;db.execute.return_value=[]
