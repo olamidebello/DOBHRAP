@@ -36,6 +36,9 @@
           ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/tax_automation_worker.py
           TimeoutStartSec=180
           UMask=0077
+          RuntimeDirectory=oob-tax-analysis
+          RuntimeDirectoryMode=0700
+          RuntimeDirectoryPreserve=yes
           NoNewPrivileges=true
           ProtectSystem=strict
           ProtectHome=true

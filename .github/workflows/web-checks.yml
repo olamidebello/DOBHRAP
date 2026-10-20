@@ -42,6 +42,8 @@ jobs:
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/use-existing-mail-oob.yml
       - name: Check tax analysis automation playbook
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-analysis-automation-oob.yml
+      - name: Check tax worker runtime repair playbook
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/repair-tax-worker-oob.yml
       - name: Install browser test runtime
         run: |
           npm install --no-save playwright@1.56.1

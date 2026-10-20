@@ -55,5 +55,18 @@ sudo systemctl status oob-tax-analysis.timer
 sudo journalctl -u oob-tax-analysis.service --since '15 minutes ago'
 ```
 
+If an older worker fails with permission denied on
+`/var/lib/dobhrap/tax-analysis.lock`, pull the latest source and run:
+
+```bash
+sudo ansible-playbook -i 'dobhrap,' -c local ansible/repair-tax-worker-oob.yml
+```
+
+This bounded repair uses a systemd-owned runtime directory at
+`/run/oob-tax-analysis`, preserves database ownership, pauses the timer during
+the update, refuses to interrupt running analysis, and processes at most one
+existing consented queue item afterward. The worker logs only a processed count,
+not document contents or credentials.
+
 Sources: https://www.irs.gov/pub/irs-pdf/fw2.pdf and
 https://www.irs.gov/pub/irs-pdf/f1040.pdf.

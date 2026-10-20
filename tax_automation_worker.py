@@ -1,12 +1,15 @@
 """Bounded, sequential document analysis. Never submits or files a tax return."""
 import fcntl
 import os
+import json
 from pathlib import Path
 import app
 
 
 def run():
-    lock_path=Path(app.DB).parent/'tax-analysis.lock'
+    # MySQL deployments may retain a root-owned, unused SQLite directory.
+    # systemd owns this separate directory on behalf of the worker account.
+    lock_path=Path(os.environ.get('RUNTIME_DIRECTORY','/run/oob-tax-analysis'))/'worker.lock'
     with lock_path.open('a') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:return 0
@@ -20,4 +23,4 @@ def run():
         return 0
 
 
-if __name__=='__main__':run()
+if __name__=='__main__':print(json.dumps({'processed':run()}))

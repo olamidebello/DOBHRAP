@@ -1,0 +1,82 @@
+---
+- name: Repair the tax worker lock directory without changing database ownership
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require local execution
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Check for in-flight document analysis before replacing worker code
+      ansible.builtin.command:
+        argv: [systemctl, show, oob-tax-analysis.service, --property=ActiveState, --value]
+      register: tax_worker_state
+      changed_when: false
+    - name: Avoid interrupting a running paid request
+      ansible.builtin.assert:
+        that: tax_worker_state.stdout | trim in ['inactive','failed']
+        fail_msg: 'The worker is running. Wait for it to finish before rerunning this repair.'
+    - name: Pause the queue timer during repair
+      ansible.builtin.systemd:
+        name: oob-tax-analysis.timer
+        state: stopped
+    - name: Repair worker and resume timer
+      block:
+        - name: Recheck worker state after the timer is paused
+          ansible.builtin.command:
+            argv: [systemctl, show, oob-tax-analysis.service, --property=ActiveState, --value]
+          register: tax_worker_paused_state
+          changed_when: false
+          failed_when: tax_worker_paused_state.stdout | trim not in ['inactive','failed']
+        - name: Test runtime locking without any provider request
+          ansible.builtin.command:
+            argv: [/opt/dobhrap/current/venv/bin/python, -m, unittest, discover, -s, tests, -p, test_tax_worker.py]
+            chdir: '{{ playbook_dir }}/..'
+          changed_when: false
+        - name: Install repaired worker with a rollback copy
+          ansible.builtin.copy:
+            src: '{{ playbook_dir }}/../tax_automation_worker.py'
+            dest: /opt/dobhrap/current/tax_automation_worker.py
+            owner: root
+            group: dobhrap-app
+            mode: '0640'
+            backup: true
+        - name: Create dedicated service override directory
+          ansible.builtin.file:
+            path: /etc/systemd/system/oob-tax-analysis.service.d
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+        - name: Give the worker its own systemd-managed lock directory
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/oob-tax-analysis.service.d/20-runtime-lock.conf
+            mode: '0644'
+            content: |
+              [Service]
+              RuntimeDirectory=oob-tax-analysis
+              RuntimeDirectoryMode=0700
+              RuntimeDirectoryPreserve=yes
+        - name: Reload worker configuration
+          ansible.builtin.systemd:
+            daemon_reload: true
+        - name: Validate repaired service
+          ansible.builtin.command:
+            argv: [systemd-analyze, verify, /etc/systemd/system/oob-tax-analysis.service]
+          changed_when: false
+        - name: Clear the previous startup failure
+          ansible.builtin.command: systemctl reset-failed oob-tax-analysis.service
+          changed_when: false
+      always:
+        - name: Resume document queue timer
+          ansible.builtin.systemd:
+            name: oob-tax-analysis.timer
+            enabled: true
+            state: started
+    - name: Run one existing user-consented queue item
+      ansible.builtin.systemd:
+        name: oob-tax-analysis.service
+        state: started
+    - name: Report bounded repair
+      ansible.builtin.debug:
+        msg: 'Worker lock moved to /run/oob-tax-analysis/worker.lock. Database ownership, documents and credentials were preserved. Reload Tax Analyst to inspect extraction results.'
