@@ -1,16 +1,17 @@
 # Account password recovery
 
-Install on the hosting server using the existing MySQL deployment:
+Install on the hosting server using the running SQLite or MySQL deployment:
 
 ```bash
 cd /opt/dobhrap-watchdog-source
 git pull --ff-only
-ansible-playbook -i 'dobhrap,' -c local ansible/install-password-reset-oob.yml
+ansible-playbook -i 'dobhrap,' -c local ansible/password-features-oob.yml -e password_issue_recovery=true
 ```
 
-The installer stages the committed application, tests the recovery logic, switches
-releases, restarts the web service to initialize the new tables, and checks local
-HTTPS and existing account setup. It preserves backend settings, encryption keys,
+The installer stages the committed application, tests recovery and server tooling,
+reads database settings from the running service process, backs up the active backend
+under `/var/backups/oob-password-repair`, creates and verifies recovery tables,
+switches releases, and checks local/public HTTPS, JavaScript and backend routes. It preserves backend settings, encryption keys,
 users, roles and data. A failed health check restores the previous app release.
 
 The sign-in page links to `/forgot-password`. Email links open
@@ -43,7 +44,7 @@ invalid reset attempts and password confirmation attempts have database-backed
 rate limits. Failed email delivery invalidates its token and records a safe audit
 event without SMTP error details or reset tokens.
 
-New tables in the platform MySQL schema (or SQLite in development):
+Recovery tables in the active platform MySQL schema or SQLite database:
 
 - `password_resets`: token digest, owner, expiry, used flag and delivery state.
 - `password_reset_limits`: hashed rate-limit key, count and window start.
@@ -58,3 +59,31 @@ API routes:
 The public custom header is `X-Password-Reset-Request: 1`. Reset links always use
 the fixed HTTPS site origin, never the request Host header. Existing disabled
 workspace and role restrictions remain in place after recovery.
+
+
+## Server recovery and backend diagnosis
+
+The live process may use MySQL even while `DOBHRAP_DB` still points at an old
+SQLite file. A successful reset against that file does not change the live MySQL
+account. `ansible/active_runtime.py` reads the selected service's MainPID and
+process environment, uses the app database adapter, and reports only the backend
+name and verification result. It refuses a missing SQLite database and never
+creates a replacement account catalog. No backend is changed by this playbook.
+
+The default service is `oob-business.service`; use `-e reset_service=dobhrap.service`
+only when that is the actual installed web service. Installation preserves existing
+passwords. The optional recovery action creates a single expiring link for
+`dobcalldemo@gmail.com` (override with `-e recovery_email=owner@example.com`).
+Read the link privately with `sudo cat /root/oob-password-reset-link.txt` and open
+it within 15 minutes. The root-only file contains a bearer credential; never paste
+it into chat or logs. No link is printed by Ansible. Issuing a replacement invalidates
+earlier links; the password changes only after completion in the GUI.
+
+All password forms include a Show passwords checkbox to verify typed or pasted
+values; setup tokens remain masked. Sign-in, setup, registration, password change
+and recovery submit through their existing protected backend endpoints. The mobile
+browser regression test follows administrator issuance, reset completion, session
+revocation, new-password login and signed-in password change against a temporary
+synthetic SQLite database. SMTP delivery and live MySQL operation still require
+verification on the target server. Passing a local test is not a deployment result.
+

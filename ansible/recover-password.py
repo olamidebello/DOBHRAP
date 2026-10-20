@@ -1,4 +1,4 @@
-"""Root-only recovery for an installed MySQL deployment. Never prints the token."""
+"""Root-only recovery using the running service backend. Never prints the token."""
 import argparse
 import os
 from pathlib import Path
@@ -35,12 +35,11 @@ def issue_recovery(c, email, output, now=None):
 
 def main():
     if os.geteuid()!=0:raise RuntimeError('Run as root on the hosting server')
-    parser=argparse.ArgumentParser();parser.add_argument('--email',required=True);args=parser.parse_args()
-    if not Path('/etc/dobhrap-mysql.env').is_file():raise RuntimeError('Active MySQL deployment not found')
-    os.environ['DOBHRAP_DB_BACKEND']='mysql'
-    os.environ['DOBHRAP_MYSQL_CONFIG']='/etc/dobhrap-mysql.json'
-    sys.path.insert(0,'/opt/dobhrap/current')
-    import app
+    parser=argparse.ArgumentParser();parser.add_argument('--email',required=True)
+    parser.add_argument('--service',default='oob-business.service');args=parser.parse_args()
+    from active_runtime import load_active, maintain
+    app=load_active(args.service)
+    maintain(app,'migrate')
     with app.connect() as c:issue_recovery(c,args.email,Path('/root/oob-password-reset-link.txt'))
     print('One-time link saved privately. Expires in 15 minutes; the password is unchanged until the link is used.')
 
@@ -49,5 +48,6 @@ if __name__=='__main__':
     try:main()
     except Exception as error:
         # Avoid SQL values, password hashes or reset tokens in Ansible logs.
-        print('Recovery failed (%s). Check the account email and installed MySQL deployment.'%type(error).__name__,file=sys.stderr)
+        print('Recovery failed (%s). Check the account email and active service backend.'%type(error).__name__,file=sys.stderr)
         sys.exit(1)
+

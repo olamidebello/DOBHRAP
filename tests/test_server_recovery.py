@@ -8,6 +8,8 @@ import app
 
 spec=importlib.util.spec_from_file_location('server_recovery',Path(__file__).resolve().parents[1]/'ansible/recover-password.py')
 recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
+spec=importlib.util.spec_from_file_location('active_runtime',Path(__file__).resolve().parents[1]/'ansible/active_runtime.py')
+runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
 
 class ServerRecoveryTests(unittest.TestCase):
     def setUp(self):
@@ -34,3 +36,35 @@ class ServerRecoveryTests(unittest.TestCase):
             with self.assertRaises(ValueError):recovery.issue_recovery(c,'missing@example.com',output)
             self.assertFalse(output.exists())
             self.assertEqual(c.execute('SELECT count(*) FROM password_resets').fetchone()[0],0)
+
+    def test_missing_tables_repaired_idempotently_without_changing_accounts(self):
+        with app.connect() as c:
+            before=dict(c.execute('SELECT * FROM users').fetchone())
+            c.execute('DROP TABLE password_resets')
+            c.execute('DROP TABLE password_reset_limits')
+        for _ in range(2):
+            self.assertEqual(runtime.maintain(app,'migrate')['backend'],'sqlite')
+        self.assertTrue(runtime.maintain(app,'verify')['ok'])
+        with app.connect() as c:
+            self.assertEqual(before,dict(c.execute('SELECT * FROM users').fetchone()))
+
+    def fake_process(self, environment):
+        root=Path(self.temp.name)/'proc';process=root/'123';process.mkdir(parents=True)
+        (process/'cwd').symlink_to(self.temp.name,target_is_directory=True)
+        (process/'cmdline').write_bytes(b'python\0/opt/dobhrap/current/app.py\0')
+        (process/'environ').write_bytes(b'\0'.join((k+'='+v).encode() for k,v in environment.items()))
+        return root
+
+    def test_live_mysql_takes_precedence_over_leftover_sqlite_path(self):
+        config=Path(self.temp.name)/'mysql.json';config.write_text('{}')
+        root=self.fake_process({'DOBHRAP_DB_BACKEND':'mysql','DOBHRAP_MYSQL_CONFIG':str(config),'DOBHRAP_DB':'/missing/stale.db'})
+        with patch.object(runtime.subprocess,'check_output',return_value='123\n'):
+            _,env=runtime.runtime(proc_root=root)
+        self.assertEqual(env['DOBHRAP_DB_BACKEND'],'mysql')
+
+    def test_missing_live_sqlite_database_is_never_created(self):
+        root=self.fake_process({'DOBHRAP_DB':'missing.db'})
+        with patch.object(runtime.subprocess,'check_output',return_value='123\n'):
+            with self.assertRaises(RuntimeError):runtime.runtime(proc_root=root)
+        self.assertFalse((Path(self.temp.name)/'missing.db').exists())
+

@@ -32,6 +32,8 @@ jobs:
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/production-marketplace-oob.yml
       - name: Run API and isolation tests
         run: python -m unittest discover -s tests -v
+      - name: Check complete password repair playbook
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/password-features-oob.yml
       - name: Install browser test runtime
         run: |
           npm install --no-save playwright@1.56.1
@@ -50,8 +52,10 @@ jobs:
           node tests/browser-smoke.cjs
           node tests/browser-client-agreement.cjs
           node tests/browser-attendance.cjs
+          node tests/browser-password-recovery.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: workspace-browser-checks
           path: test-results/
+
