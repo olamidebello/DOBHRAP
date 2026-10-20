@@ -1,0 +1,26 @@
+---
+- import_playbook: wallet-marketplace-oob.yml
+
+- name: Verify manual cash-out installation
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify cash-out tables in the actual running backend
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/check-cashout.py]
+      changed_when: false
+    - name: Verify user and Super Admin interface
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/cashout.js
+        return_content: true
+      register: cashout_gui
+      failed_when: "'platform/cashout/authorize' not in cashout_gui.content or 'cashout/request' not in cashout_gui.content"
+      changed_when: false
+    - name: Report manual payout workflow
+      ansible.builtin.debug:
+        msg:
+          - 'Cash-out requests are enabled on first installation; subsequent deployments preserve the administrator pause setting.'
+          - 'Super admin > Cash-out management: authorize funded balances, review requests, approve or reject and record completed external payments.'
+          - 'Users > Cash out: submit requests, see held amounts and cancel pending requests.'
+          - 'No existing credit was made withdrawable and no bank transfer was initiated.'

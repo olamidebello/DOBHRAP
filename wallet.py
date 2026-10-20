@@ -63,6 +63,7 @@ def checkout(c,body,user,tenant_id):
  amount=product['amount'];code=product['currency']
  if type(amount) is not int or amount<=0:raise a.ServiceError('Invalid offer price')
  if c.execute('UPDATE wallet_accounts SET balance=balance-? WHERE owner=? AND currency=? AND balance>=?',(amount,user['id'],code,amount)).rowcount!=1:raise a.ServiceError('Insufficient '+code+' account balance',402)
+ c.execute('UPDATE cashout_funds SET available=(SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?) WHERE owner=? AND currency=? AND available>(SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?)',(user['id'],code,user['id'],code,user['id'],code))
  oid=str(uuid.uuid4());now=int(time.time())
  c.execute('INSERT INTO market_orders(id,tenant_id,owner,product_id,name,service_code,amount,currency,gateway,environment,request_key,state,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(oid,tenant_id,user['id'],product['id'],product['name'],product['service_code'],amount,code,'wallet','wallet',key,'fulfilled',now))
  c.execute('INSERT INTO wallet_entries VALUES(?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),user['id'],code,-amount,'purchase',oid,key,user['id'],'Marketplace purchase: '+product['name'],now))
