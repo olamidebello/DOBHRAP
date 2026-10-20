@@ -70,3 +70,22 @@ not document contents or credentials.
 
 Sources: https://www.irs.gov/pub/irs-pdf/fw2.pdf and
 https://www.irs.gov/pub/irs-pdf/f1040.pdf.
+
+## No W-2 available
+
+On the preparation Start slide, select **W-2 availability**. Choose `not_expected`
+only when no wage income requiring a W-2 is expected. The supported projection
+then uses verified federal withholding on entered income, estimated/extension
+payments and prior-year applied credits as a comparison reference. Its refund
+estimate remains payments minus supported calculated tax; it never applies a
+fixed minimum or raises the result to equal payments. Refundable credits remain
+outside this limited numerical engine and require qualified calculation.
+
+Choose `expected_missing` if a W-2 is missing. The projection stays blocked until
+wage/withholding records are reconciled. Request the form from the employer and
+review IRS Form 4852 requirements if it cannot be obtained; this app does not
+automatically prepare or validate that substitute form. Unknown missing-form
+status also blocks a projection when no W-2 income has been entered. Unavailable
+data are not inferred from bank deposits or replaced by a recommended refund.
+
+IRS missing-form guidance: https://www.irs.gov/forms-pubs/about-form-4852.

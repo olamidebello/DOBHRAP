@@ -67,6 +67,9 @@
         daemon_reload: true
         enabled: true
         state: started
+    - name: Clear earlier startup failure after installing the corrected worker
+      ansible.builtin.command: systemctl reset-failed oob-tax-analysis.service
+      changed_when: false
     - name: Verify automation GUI is available
       ansible.builtin.uri:
         url: https://olamideolatayobello.com/tax-analyst.js

@@ -57,6 +57,19 @@ class TaxPreparationTests(unittest.TestCase):
   draft=self.create();saved=self.save(draft,data,completed=completed);computed=self.call('refund-review',{'id':draft['id'],'revision':saved['revision'],**confirm});self.assertIsNotNone(computed['refund_review']['projection'])
   changed=computed['data'];changed['income'][0]['withholding']='5000';edited=self.save(computed,changed);self.assertEqual(edited['refund_review'],{})
   self.assertIsNone(t.refund_review(data,completed,{})['projection']);data['states']=[{'state':'TX'}];self.assertIsNone(t.refund_review(data,completed,confirm)['projection'])
+ def test_no_w2_uses_verified_payments_not_an_invented_minimum(self):
+  data={s['key']:[] if s.get('repeat') else {} for s in t.STEPS}
+  data.update(start={'name':'No wage income','return_type':'personal','assistance':'self_guided','w2_status':'not_expected'},personal={'first_name':'F','last_name':'P','birth_date':'1990-01-01','tax_id':'111223333','residency':'us_citizen_resident'},spouse={'applies':'no'},address={'line1':'1 Test','city':'City','region':'TX','postal':'75001','country':'US'},household={'filing_status':'single','married':'no','dependent':'no','age65':'no','blind':'no','spouse_itemizes':'no','digital_assets':'no'},deductions={'method':'standard'},credits={f['key']:'no' for f in t.STEP_MAP['credits']['fields'] if f['type']=='select'},income=[{'kind':'1099_int','payer':'Test','amount':'28500','withholding':'1000'}],payments={'estimated':'500','extension':'0','prior_credit':'0'})
+  completed=[s['key'] for s in t.STEPS[:14]];confirm={'verified_records':True,'no_other_taxes_or_credits':True}
+  result=t.refund_review(data,completed,confirm)
+  self.assertIsNotNone(result['projection'])
+  self.assertEqual(result['payment_comparison']['comparison_target_cents'],150000)
+  self.assertEqual(result['projection']['estimated_refund_cents'],26000)
+  self.assertFalse(result['payment_comparison']['minimum_refund_guaranteed'])
+  data['start']['w2_status']='expected_missing'
+  self.assertIsNone(t.refund_review(data,completed,confirm)['projection'])
+  data['start'].pop('w2_status')
+  self.assertIsNone(t.refund_review(data,completed,confirm)['projection'])
  def test_six_year_catalog_and_annual_rules(self):
   import tax_rules
   years=t.year_catalog()['years'];self.assertEqual(len(years),6);self.assertEqual(years[0]-years[-1],5)
