@@ -1,0 +1,80 @@
+---
+- import_playbook: password-features-oob.yml
+
+- name: Configure sequential tax document automation with existing OpenAI settings
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars:
+    reset_service: oob-business.service
+  tasks:
+    - name: Verify and enable existing document provider configuration without exposing keys
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/tax-automation-check.py, '{{ reset_service }}']
+      register: tax_automation_ready
+    - name: Require the dedicated application service account
+      ansible.builtin.command:
+        argv: [systemctl, show, '{{ reset_service }}', --property=User, --value]
+      register: tax_automation_user
+      changed_when: false
+      failed_when: tax_automation_user.stdout | trim != 'dobhrap-app'
+    - name: Install bounded tax analysis service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-tax-analysis.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Sequential consented tax document analysis
+          After=network-online.target {{ reset_service }}
+          [Service]
+          Type=oneshot
+          User=dobhrap-app
+          Group=dobhrap-app
+          WorkingDirectory=/opt/dobhrap/current
+          EnvironmentFile=/etc/dobhrap.env
+          EnvironmentFile=-/etc/dobhrap-mysql.env
+          ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/tax_automation_worker.py
+          TimeoutStartSec=180
+          UMask=0077
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          ReadWritePaths=/var/lib/dobhrap
+    - name: Install sequential analysis timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-tax-analysis.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Check consented document queue each minute
+          [Timer]
+          OnBootSec=60s
+          OnUnitInactiveSec=60s
+          Unit=oob-tax-analysis.service
+          [Install]
+          WantedBy=timers.target
+    - name: Validate systemd unit configuration
+      ansible.builtin.command:
+        argv: [systemd-analyze, verify, /etc/systemd/system/oob-tax-analysis.service, /etc/systemd/system/oob-tax-analysis.timer]
+      changed_when: false
+    - name: Enable the document queue timer
+      ansible.builtin.systemd:
+        name: oob-tax-analysis.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Verify automation GUI is available
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/tax-analyst.js
+        return_content: true
+      register: tax_automation_gui
+      failed_when: "'queue-analysis' not in tax_automation_gui.content or 'automation-summary' not in tax_automation_gui.content"
+      changed_when: false
+    - name: Report configured automation
+      ansible.builtin.debug:
+        msg:
+          - 'Tax preparation > Tax analyst: upload documents, confirm full-document AI consent and queue background analysis.'
+          - 'Existing OpenAI key/model reused; no paid AI request was made by deployment. User-queued work can incur API charges.'
+          - 'One document per timer run, no overlapping queue workers, per-user limits and no automatic paid retries.'
+          - 'Review every extracted line, source page, category and eligibility before compiling. W-2 Box 2 is withholding, not a guaranteed minimum refund.'

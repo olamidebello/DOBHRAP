@@ -51,6 +51,9 @@ class TaxPreparationTests(unittest.TestCase):
   data.update(start={'name':'Fixture','return_type':'personal','assistance':'self_guided'},personal={'first_name':'F','last_name':'P','birth_date':'1990-01-01','tax_id':'111223333','residency':'us_citizen_resident'},spouse={'applies':'no'},address={'line1':'1 Test','city':'City','region':'TX','postal':'75001','country':'US'},household={'filing_status':'single','married':'no','dependent':'no','age65':'no','blind':'no','spouse_itemizes':'no','digital_assets':'no'},deductions={'method':'standard','cash_charity':'1500'},credits={f['key']:'no' for f in t.STEP_MAP['credits']['fields'] if f['type']=='select'},income=[{'kind':'w2','payer':'Test','amount':'50000','withholding':'6000'}],payments={'estimated':'100','extension':'50','prior_credit':'25','prior_agi':'999999'})
   completed=[s['key'] for s in t.STEPS[:14]];confirm={'verified_records':True,'no_other_taxes_or_credits':True,'charity_verified':True}
   r=t.refund_review(data,completed,confirm);self.assertFalse(r['maximum_refund_verified']);self.assertEqual(r['projection']['payments_and_withholding_cents'],617500);self.assertEqual(r['projection']['supported_tax_savings_cents'],12000);self.assertEqual(r['projection']['scenarios'][1]['extra_deduction_cents'],100000);self.assertEqual(r['projection']['estimated_federal_tax_cents'],370000);self.assertEqual(r['projection']['estimated_refund_cents'],247500)
+  self.assertEqual(r['w2_comparison']['comparison_target_cents'],600000)
+  self.assertEqual(r['w2_comparison']['estimated_refund_minus_target_cents'],-352500)
+  self.assertLess(r['projection']['estimated_refund_cents'],r['w2_comparison']['comparison_target_cents'])
   draft=self.create();saved=self.save(draft,data,completed=completed);computed=self.call('refund-review',{'id':draft['id'],'revision':saved['revision'],**confirm});self.assertIsNotNone(computed['refund_review']['projection'])
   changed=computed['data'];changed['income'][0]['withholding']='5000';edited=self.save(computed,changed);self.assertEqual(edited['refund_review'],{})
   self.assertIsNone(t.refund_review(data,completed,{})['projection']);data['states']=[{'state':'TX'}];self.assertIsNone(t.refund_review(data,completed,confirm)['projection'])
@@ -189,3 +192,4 @@ class ClientRecordRequestTests(TaxPreparationTests):
   self.assertIn('pages 1 and 2',self.call('client-status',{'id':d['id']})[0]['record_descriptions']['Property statement'])
   for custom in ([{'name':'','description':'Missing name'}],[{'name':'A','description':'x'*1001}],[{'name':'A','description':5}],[{'name':'A'},{'name':'a'}],[t.DEFAULT_RECORDS[0]],[{'name':'A'}]*21):
    with self.assertRaises(a.ServiceError):self.engagement(d,custom_records=custom)
+

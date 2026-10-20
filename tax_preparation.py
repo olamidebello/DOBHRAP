@@ -308,6 +308,8 @@ def refund_review(data,completed,confirm,tax_year=2026):
   adjusted=tax_rules.estimate(tax_year,format(Decimal(max(0,gross-allowed_cash))/100,'.2f'))
   scenarios.append({'name':'Standard deduction plus verified eligible cash charity','extra_deduction_cents':allowed_cash,'tax_cents':adjusted['ordinary_income_tax_cents']})
  best=min(scenarios,key=lambda x:x['tax_cents']);delta=payments-best['tax_cents']
+ w2_withheld=sum(a.cents(item.get('withholding') or '0') for item in data.get('income',[]) if item.get('kind')=='w2')
+ result['w2_comparison']={'w2_box2_entered_cents':w2_withheld,'comparison_target_cents':w2_withheld,'estimated_refund_minus_target_cents':max(0,delta)-w2_withheld,'notice':'W-2 withholding is a comparison target, never a minimum refund. Do not alter deductions or income to reach it.'}
  result['projection']={'scenarios':scenarios,'selected':best['name'],'reported_income_cents':gross,'payments_and_withholding_cents':payments,'estimated_federal_tax_cents':best['tax_cents'],
  'estimated_refund_cents':max(0,delta),'estimated_balance_due_cents':max(0,-delta),'supported_tax_savings_cents':base['ordinary_income_tax_cents']-best['tax_cents'],'standard_deduction_cents':base['standard_deduction_cents']}
  return result
@@ -567,3 +569,4 @@ def process_suggestions(c,allowed_owners,limit=3):
   else:state='cancelled'
   c.execute('UPDATE tax_suggestion_jobs SET state=?,finished=? WHERE id=?',(state,int(time.time()),job['id']));a.audit(c,job['owner'],'Automatic tax opportunity review '+state);c.commit()
  return processed
+
