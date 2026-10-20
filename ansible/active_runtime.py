@@ -49,13 +49,15 @@ def runtime(service='oob-business.service', proc_root=Path('/proc')):
 
 def load_active(service='oob-business.service', source=None):
     cwd, values = runtime(service)
-    # Remove inherited backend overrides before copying the live process settings.
-    for key in list(os.environ):
-        if key.startswith(('DOBHRAP_', 'SMTP_')):
-            del os.environ[key]
-    os.environ.update({k: v for k, v in values.items() if k.startswith(('DOBHRAP_', 'SMTP_'))})
+    target_source=Path(source).resolve() if source else cwd
     os.chdir(cwd)
-    sys.path.insert(0, str(Path(source).resolve() if source else cwd))
+    sys.path.insert(0, str(target_source))
+    provider_fields=set(importlib.import_module('provider_settings').FIELDS)
+    # Include provider environment values, not just DB/SMTP settings. Nothing is printed.
+    for key in list(os.environ):
+        if key.startswith(('DOBHRAP_', 'SMTP_')) or key in provider_fields:
+            del os.environ[key]
+    os.environ.update({k: v for k, v in values.items() if k.startswith(('DOBHRAP_', 'SMTP_')) or k in provider_fields})
     app = importlib.import_module('app')
     app.DB = values.get('DOBHRAP_DB', app.DB)
     return app

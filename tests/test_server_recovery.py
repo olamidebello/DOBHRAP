@@ -67,4 +67,18 @@ class ServerRecoveryTests(unittest.TestCase):
         with patch.object(runtime.subprocess,'check_output',return_value='123\n'):
             with self.assertRaises(RuntimeError):runtime.runtime(proc_root=root)
         self.assertFalse((Path(self.temp.name)/'missing.db').exists())
+    def test_live_provider_environment_is_preserved_without_stale_local_keys(self):
+        import sys
+        original_cwd=Path.cwd();original_path=list(sys.path)
+        try:
+            with patch.dict(os.environ,{'OPENAI_API_KEY':'synthetic-stale','TAX_ANALYST_MODEL':'stale'}):
+                with patch.object(runtime,'runtime',return_value=(Path(self.temp.name),{
+                    'DOBHRAP_DB':app.DB,'DOBHRAP_DB_BACKEND':'sqlite',
+                    'OPENAI_API_KEY':'synthetic-live','TAX_AI_MODEL':'synthetic-document-model'})):
+                    runtime.load_active()
+                self.assertEqual(os.environ['OPENAI_API_KEY'],'synthetic-live')
+                self.assertEqual(os.environ['TAX_AI_MODEL'],'synthetic-document-model')
+                self.assertNotIn('TAX_ANALYST_MODEL',os.environ)
+        finally:
+            os.chdir(original_cwd);sys.path[:]=original_path
 
