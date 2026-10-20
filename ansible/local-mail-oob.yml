@@ -1,0 +1,223 @@
+---
+- import_playbook: password-features-oob.yml
+
+- name: Install local outbound Postfix and DKIM for password recovery
+  hosts: dobhrap
+  become: true
+  gather_facts: true
+  vars:
+    reset_service: oob-business.service
+    local_mail_domain: olamideolatayobello.com
+    local_mail_hostname: mail.olamideolatayobello.com
+    local_mail_sender: noreply@olamideolatayobello.com
+    local_mail_public_ip: 181.214.149.146
+    local_mail_selector: oob
+    local_mail_postfix:
+      myhostname: '{{ local_mail_hostname }}'
+      mydomain: '{{ local_mail_domain }}'
+      myorigin: '{{ local_mail_domain }}'
+      inet_interfaces: loopback-only
+      inet_protocols: ipv4
+      mynetworks: 127.0.0.1/32
+      mydestination: localhost
+      relayhost: ''
+      relay_domains: ''
+      smtpd_relay_restrictions: permit_mynetworks,reject_unauth_destination
+      smtpd_recipient_restrictions: permit_mynetworks,reject
+      smtpd_sasl_auth_enable: 'no'
+      smtp_sasl_auth_enable: 'no'
+      smtp_tls_security_level: may
+      smtp_tls_CAfile: /etc/ssl/certs/ca-certificates.crt
+      smtpd_milters: inet:127.0.0.1:8891
+      non_smtpd_milters: inet:127.0.0.1:8891
+      milter_default_action: tempfail
+      milter_protocol: '6'
+  tasks:
+    - name: Validate local-only installation and mail identity
+      ansible.builtin.assert:
+        that:
+          - ansible_connection == 'local'
+          - ansible_os_family == 'Debian'
+          - local_mail_domain is match('^[a-z0-9][a-z0-9.-]+[.][a-z]{2,}$')
+          - local_mail_hostname is match('^[a-z0-9][a-z0-9.-]+[.][a-z]{2,}$')
+          - local_mail_selector is match('^[a-z0-9]{1,30}$')
+          - local_mail_sender is match('^[a-zA-Z0-9._+-]+@' + (local_mail_domain | regex_escape) + '$')
+    - name: Inspect existing mail ownership
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: [/etc/oob-local-mail.managed, /etc/postfix/main.cf, /etc/exim4]
+      register: local_mail_existing
+    - name: Preserve any unmanaged mail installation
+      ansible.builtin.assert:
+        that: local_mail_existing.results[0].stat.exists or (not local_mail_existing.results[1].stat.exists and not local_mail_existing.results[2].stat.exists)
+        fail_msg: 'An existing unmanaged mail installation was found. It was not replaced; integrate that service before using this installer.'
+    - name: Inspect other installed mail transport packages
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, '-f=${binary:Package} ${db:Status-Status}\n', exim4-daemon-light, exim4-daemon-heavy, sendmail-bin]
+      register: local_mail_packages
+      failed_when: false
+      changed_when: false
+    - name: Prevent package replacement of another mail transport
+      ansible.builtin.assert:
+        that: "not (local_mail_packages.stdout is search(' installed'))"
+        fail_msg: 'Another mail transport package is installed. No mail packages were replaced.'
+    - name: Inspect SMTP and DKIM listener conflicts
+      ansible.builtin.command:
+        argv: [ss, -H, -ltn, 'sport = :25 or sport = :8891']
+      register: local_mail_listeners
+      changed_when: false
+    - name: Avoid taking over existing listeners
+      ansible.builtin.assert:
+        that: local_mail_existing.results[0].stat.exists or local_mail_listeners.stdout | trim == ''
+        fail_msg: 'Port 25 or 8891 is already in use by an unmanaged service. No mail settings were replaced.'
+    - name: Record ownership for safe resumable installation
+      ansible.builtin.copy:
+        dest: /etc/oob-local-mail.managed
+        content: 'DOBHRAP local outbound mail; no public SMTP listener.\n'
+        owner: root
+        group: root
+        mode: '0600'
+    - name: Prepare noninteractive Postfix package setup
+      ansible.builtin.debconf:
+        name: postfix
+        question: '{{ item.question }}'
+        value: '{{ item.value }}'
+        vtype: '{{ item.type }}'
+      loop:
+        - {question: postfix/main_mailer_type, value: 'Internet Site', type: select}
+        - {question: postfix/mailname, value: '{{ local_mail_domain }}', type: string}
+    - name: Install the mail engine without auto-starting an unconfigured listener
+      ansible.builtin.apt:
+        name: [postfix, opendkim, opendkim-tools, ca-certificates, dnsutils]
+        state: present
+        update_cache: true
+        policy_rc_d: 101
+    - name: Create private DKIM key directory
+      ansible.builtin.file:
+        path: '/etc/opendkim/keys/{{ local_mail_domain }}'
+        state: directory
+        owner: opendkim
+        group: opendkim
+        mode: '0700'
+    - name: Generate persistent DKIM key once without rotating existing keys
+      ansible.builtin.command:
+        argv: [opendkim-genkey, -b, '2048', -d, '{{ local_mail_domain }}', -s, '{{ local_mail_selector }}', -D, '/etc/opendkim/keys/{{ local_mail_domain }}']
+        creates: '/etc/opendkim/keys/{{ local_mail_domain }}/{{ local_mail_selector }}.private'
+      no_log: true
+    - name: Protect the DKIM private key
+      ansible.builtin.file:
+        path: '/etc/opendkim/keys/{{ local_mail_domain }}/{{ local_mail_selector }}.private'
+        owner: opendkim
+        group: opendkim
+        mode: '0600'
+    - name: Trust only the local application submission address for signing
+      ansible.builtin.copy:
+        dest: /etc/opendkim/oob-trusted-hosts
+        content: '127.0.0.1\n'
+        owner: root
+        group: opendkim
+        mode: '0640'
+    - name: Configure isolated DKIM signer
+      ansible.builtin.copy:
+        dest: /etc/opendkim/oob.conf
+        owner: root
+        group: opendkim
+        mode: '0640'
+        content: |
+          Syslog yes
+          Mode s
+          Canonicalization relaxed/simple
+          Socket inet:8891@127.0.0.1
+          InternalHosts /etc/opendkim/oob-trusted-hosts
+          Domain {{ local_mail_domain }}
+          Selector {{ local_mail_selector }}
+          KeyFile /etc/opendkim/keys/{{ local_mail_domain }}/{{ local_mail_selector }}.private
+          OversignHeaders From
+    - name: Install isolated signer service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-opendkim.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=OOB outbound DKIM signer
+          After=network.target
+          [Service]
+          Type=simple
+          User=opendkim
+          Group=opendkim
+          ExecStart=/usr/sbin/opendkim -f -x /etc/opendkim/oob.conf
+          Restart=on-failure
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          [Install]
+          WantedBy=multi-user.target
+    - name: Apply outbound-only Postfix configuration with backups
+      ansible.builtin.lineinfile:
+        path: /etc/postfix/main.cf
+        regexp: '^{{ item.key }}\s*='
+        line: '{{ item.key }} = {{ item.value }}'
+        backup: true
+      loop: '{{ local_mail_postfix | dict2items }}'
+    - name: Validate Postfix configuration
+      ansible.builtin.command: postfix check
+      changed_when: false
+    - name: Validate DKIM configuration
+      ansible.builtin.command: opendkim -n -x /etc/opendkim/oob.conf
+      changed_when: false
+    - name: Start DKIM signer
+      ansible.builtin.systemd:
+        name: oob-opendkim.service
+        daemon_reload: true
+        enabled: true
+        state: restarted
+    - name: Wait for local signer before accepting mail
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8891
+        timeout: 15
+    - name: Start local-only mail engine
+      ansible.builtin.systemd:
+        name: postfix.service
+        enabled: true
+        state: restarted
+    - name: Wait for local SMTP submission
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 25
+        timeout: 15
+    - name: Verify SMTP has no public listening socket
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import subprocess
+            rows=subprocess.check_output(['ss','-H','-ltn','sport = :25'],text=True).splitlines()
+            assert rows and all(row.split()[3]=='127.0.0.1:25' for row in rows), 'SMTP must listen only on 127.0.0.1:25'
+      changed_when: false
+    - name: Write local submission configuration
+      ansible.builtin.copy:
+        dest: /root/oob-local-smtp.json
+        owner: root
+        group: root
+        mode: '0600'
+        content: "{{ {'SMTP_HOST':'127.0.0.1','SMTP_PORT':'25','SMTP_USERNAME':'','SMTP_PASSWORD':'','SMTP_FROM':local_mail_sender,'SMTP_SECURITY':'local'} | to_json }}"
+    - name: Connect application to local Postfix using the live backend
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/configure-smtp.py, --config, /root/oob-local-smtp.json, --service, '{{ reset_service }}']
+      register: local_mail_application
+      changed_when: true
+    - name: Produce DNS instructions and external delivery diagnostics
+      ansible.builtin.command:
+        argv: [python3, '{{ playbook_dir }}/local-mail-readiness.py', --domain, '{{ local_mail_domain }}', --hostname, '{{ local_mail_hostname }}', --ip, '{{ local_mail_public_ip }}', --selector, '{{ local_mail_selector }}']
+      register: local_mail_readiness
+      changed_when: false
+    - name: Report local engine and external delivery status
+      ansible.builtin.debug:
+        msg:
+          - 'Local Postfix and DKIM installed. Application sender: {{ local_mail_sender }}. No Gmail password is required.'
+          - '{{ local_mail_readiness.stdout }}'
+          - 'DNS instructions: /var/log/oob-local-mail-dns.txt. Diagnostics: /var/log/oob-local-mail-readiness.json.'
+          - 'No email has been sent. Publish DNS records and request provider PTR/reverse DNS, then use Forgot password to verify delivery.'

@@ -36,6 +36,8 @@ jobs:
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/password-features-oob.yml
       - name: Check SMTP configuration playbook
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/smtp-oob.yml
+      - name: Check local mail engine playbook
+        run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/local-mail-oob.yml
       - name: Install browser test runtime
         run: |
           npm install --no-save playwright@1.56.1

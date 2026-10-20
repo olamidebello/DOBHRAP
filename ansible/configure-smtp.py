@@ -20,6 +20,9 @@ def configure(app, supplied):
         if not isinstance(value,str):raise ValueError('SMTP values must be strings')
         candidate[key]=value or settings.get('SMTP_'+key,'') or defaults.get(key,'')
     candidate['PORT']=candidate['PORT'] or ('465' if candidate['SECURITY']=='tls' else '587')
+    if supplied.get('SMTP_SECURITY')=='local':
+        # Local mode must explicitly discard saved external relay credentials.
+        candidate.update(HOST=supplied.get('SMTP_HOST','127.0.0.1'),PORT=supplied.get('SMTP_PORT','25'),USERNAME='',PASSWORD='')
     for key,value in candidate.items():settings.validate('SMTP_'+key,value)
     if not candidate['HOST'] or not candidate['FROM']:
         raise ValueError('SMTP host and sender are required')
@@ -36,7 +39,7 @@ def configure(app, supplied):
                       ('SMTP_'+key,a.seal({'value':str(value)}),int(time.time())))
         c.execute('INSERT OR REPLACE INTO provider_checks VALUES(?,?,?,?,?)',
                   ('smtp',1,int(time.time()),result['message'],0))
-        a.audit(c,0,'SMTP recovery configuration encrypted; TLS and authentication checked')
+        a.audit(c,0,'SMTP recovery configuration encrypted; connection verified')
         c.commit()
     return result
 

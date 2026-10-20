@@ -67,3 +67,30 @@ class SMTPTests(unittest.TestCase):
                     body={'action':'test','provider':'smtp','confirm_password':'smtp-test-owner-password'})
                 self.assertTrue(result['ok']);check.assert_called_once()
                 self.assertEqual(c.execute("SELECT ok FROM provider_checks WHERE provider='smtp'").fetchone()[0],1)
+    def test_local_mode_clears_saved_relay_credentials(self):
+        supplied={'SMTP_'+key:str(value) for key,value in self.config.items()}
+        with patch.object(recovery,'check_mail_connection',return_value={'ok':True,'message':'Verified'}) as check:
+            setup.configure(app,supplied)
+            setup.configure(app,{'SMTP_HOST':'127.0.0.1','SMTP_PORT':'25',
+                'SMTP_SECURITY':'local','SMTP_FROM':'noreply@example.com'})
+            candidate=check.call_args.args[0]
+            self.assertEqual(candidate['USERNAME'],'');self.assertEqual(candidate['PASSWORD'],'')
+        config=recovery.mail_config()
+        self.assertEqual((config['HOST'],config['PORT'],config['SECURITY']),('127.0.0.1',25,'local'))
+    def test_local_mode_rejects_remote_plaintext_and_authentication(self):
+        local={**self.config,'HOST':'127.0.0.1','PORT':25,'SECURITY':'local','USERNAME':'','PASSWORD':''}
+        for change in ({'HOST':'smtp.example.com'},{'PORT':587},{'USERNAME':'owner'},{'PASSWORD':'secret'}):
+            with self.assertRaises(app.advanced.ServiceError):recovery.smtp_connection({**local,**change})
+        client=MagicMock();client.__enter__.return_value=client;client.noop.return_value=(250,b'OK')
+        with patch.object(recovery.smtplib,'SMTP',return_value=client):
+            result=recovery.check_mail_connection(local)
+        client.starttls.assert_not_called();client.login.assert_not_called()
+        self.assertIn('Local SMTP',result['message'])
+    def test_recovery_message_has_sender_domain_id_and_date(self):
+        client=MagicMock();client.__enter__.return_value=client
+        with patch.object(recovery,'smtp_connection',return_value=client):
+            recovery.send_email(self.config,'client@example.net','synthetic-token')
+        message=client.send_message.call_args.args[0]
+        self.assertTrue(message['Date'])
+        self.assertIn('@example.com>',message['Message-ID'])
+        self.assertEqual(message['From'],'owner@example.com')

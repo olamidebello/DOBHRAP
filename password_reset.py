@@ -6,6 +6,7 @@ import smtplib
 import ssl
 import time
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 import advanced as a
 import provider_settings as settings
 
@@ -49,11 +50,18 @@ def mail_config():
         raise a.ServiceError('Email recovery is not configured. Contact your administrator for a reset link.',503)
     result['PORT']=int(result['PORT'] or ('465' if result['SECURITY']=='tls' else '587'))
     result['SECURITY']=result['SECURITY'] or 'starttls'
-    if result['SECURITY'] not in ('tls','starttls'):raise a.ServiceError('Secure email delivery is not configured',503)
+    if result['SECURITY']=='local':
+        if result['HOST']!='127.0.0.1' or result['PORT']!=25 or result['USERNAME'] or result['PASSWORD']:
+            raise a.ServiceError('Local mail requires 127.0.0.1 port 25 without credentials',503)
+    elif result['SECURITY'] not in ('tls','starttls'):raise a.ServiceError('Secure email delivery is not configured',503)
     return result
 
 
 def smtp_connection(config):
+    if config['SECURITY'] not in ('local','starttls','tls'):
+        raise a.ServiceError('Unsupported SMTP security mode',503)
+    if config['SECURITY']=='local' and (config['HOST']!='127.0.0.1' or config['PORT']!=25 or config['USERNAME'] or config['PASSWORD']):
+        raise a.ServiceError('Local SMTP is restricted to 127.0.0.1 port 25 without credentials',503)
     client=smtplib.SMTP_SSL if config['SECURITY']=='tls' else smtplib.SMTP
     options={'timeout':15}
     if config['SECURITY']=='tls':options['context']=ssl.create_default_context()
@@ -70,15 +78,19 @@ def smtp_connection(config):
 
 
 def check_mail_connection(config=None):
-    with smtp_connection(config or mail_config()) as smtp:
+    config=config or mail_config()
+    with smtp_connection(config) as smtp:
         code,_=smtp.noop()
         if code!=250:raise a.ServiceError('SMTP connection check failed',502)
-    return {'ok':True,'message':'SMTP TLS and configured authentication verified. No email was sent; inbox delivery is not yet verified.'}
+    local=config['SECURITY']=='local'
+    return {'ok':True,'message':('Local SMTP connection verified.' if local else 'SMTP TLS and configured authentication verified.')+' No email was sent; inbox delivery is not yet verified.'}
 
 
 def send_email(config, email, token):
     message=EmailMessage()
     message['From']=config['FROM'];message['To']=email;message['Subject']='Reset your Olamide Olatayo Bello password'
+    message['Date']=formatdate(localtime=False)
+    message['Message-ID']=make_msgid(domain=config['FROM'].rsplit('@',1)[-1])
     message.set_content('Use this link within 15 minutes to choose a new password:\n\n'+link(token)+'\n\nIf you did not request this, you can ignore this message. Your password has not changed.')
     with smtp_connection(config) as smtp:
         smtp.send_message(message)
