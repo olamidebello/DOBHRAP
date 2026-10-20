@@ -1,0 +1,58 @@
+---
+- import_playbook: password-features-oob.yml
+
+- name: Connect recovery email to the existing Postfix service
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars:
+    reset_service: oob-business.service
+    existing_mail_sender: noreply@olamideolatayobello.com
+    existing_mail_probe_recipient: dobcalldemo@gmail.com
+  tasks:
+    - name: Require local execution
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Require running existing Postfix
+      ansible.builtin.command: systemctl is-active postfix.service
+      changed_when: false
+    - name: Confirm loopback SMTP is reachable
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 25
+        timeout: 15
+    - name: Verify sender and recipient acceptance without sending email
+      ansible.builtin.command:
+        argv: [python3, '{{ playbook_dir }}/existing-mail-probe.py', --sender, '{{ existing_mail_sender }}', --recipient, '{{ existing_mail_probe_recipient }}']
+      changed_when: false
+    - name: Prepare private application SMTP configuration
+      ansible.builtin.tempfile:
+        state: file
+        prefix: oob-existing-mail-
+      register: existing_mail_input
+    - name: Save local SMTP settings and remove temporary input
+      block:
+        - name: Write local submission settings
+          ansible.builtin.copy:
+            dest: '{{ existing_mail_input.path }}'
+            owner: root
+            group: root
+            mode: '0600'
+            content: "{{ {'SMTP_HOST':'127.0.0.1','SMTP_PORT':'25','SMTP_USERNAME':'','SMTP_PASSWORD':'','SMTP_FROM':existing_mail_sender,'SMTP_SECURITY':'local'} | to_json }}"
+        - name: Configure the application through its live database backend
+          ansible.builtin.command:
+            argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/configure-smtp.py, --config, '{{ existing_mail_input.path }}', --service, '{{ reset_service }}']
+          no_log: true
+      always:
+        - name: Remove temporary input
+          ansible.builtin.file:
+            path: '{{ existing_mail_input.path }}'
+            state: absent
+    - name: Report application integration
+      ansible.builtin.debug:
+        msg:
+          - 'Application recovery email now uses the existing Postfix service at 127.0.0.1:25.'
+          - 'Sender: {{ existing_mail_sender }}. SMTP passwords are not required.'
+          - 'Local sender/recipient acceptance verified without sending a message. Inbox delivery remains unverified.'
+          - 'Use Forgot password, then check the inbox and sudo postqueue -p for delivery problems.'
+          - 'Postfix configuration, ports, existing mail domains, TLS and DKIM were preserved.'

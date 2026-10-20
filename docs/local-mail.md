@@ -1,5 +1,26 @@
 # Use the hosting server for outgoing recovery email
 
+## Existing Postfix installation
+
+When Postfix is already active, use this integration instead of the new-engine installer:
+
+```bash
+cd /opt/dobhrap-watchdog-source
+git pull --ff-only
+sudo ansible-playbook -i 'dobhrap,' -c local ansible/use-existing-mail-oob.yml
+```
+
+It checks sender/recipient acceptance on 127.0.0.1:25 using SMTP MAIL, RCPT and
+RSET, without sending DATA or a message. It then stores the local application
+settings in the running backend. Existing Postfix configuration, public listeners,
+mailboxes, TLS, relay settings and DKIM are preserved. It does not create the
+ownership marker used by the new-engine installer. Override `existing_mail_sender`
+and `existing_mail_probe_recipient` when needed. Verify actual delivery separately
+using Forgot password and the mail queue. If relay acceptance fails, inspect the
+existing Postfix policy before changing it; this workflow does not relax it.
+
+## New mail engine installation
+
 ```bash
 cd /opt/dobhrap-watchdog-source
 git pull --ff-only
