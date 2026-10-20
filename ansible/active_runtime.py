@@ -51,9 +51,9 @@ def load_active(service='oob-business.service', source=None):
     cwd, values = runtime(service)
     # Remove inherited backend overrides before copying the live process settings.
     for key in list(os.environ):
-        if key.startswith('DOBHRAP_'):
+        if key.startswith(('DOBHRAP_', 'SMTP_')):
             del os.environ[key]
-    os.environ.update({k: v for k, v in values.items() if k.startswith('DOBHRAP_')})
+    os.environ.update({k: v for k, v in values.items() if k.startswith(('DOBHRAP_', 'SMTP_'))})
     os.chdir(cwd)
     sys.path.insert(0, str(Path(source).resolve() if source else cwd))
     app = importlib.import_module('app')

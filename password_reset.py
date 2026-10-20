@@ -53,16 +53,34 @@ def mail_config():
     return result
 
 
+def smtp_connection(config):
+    client=smtplib.SMTP_SSL if config['SECURITY']=='tls' else smtplib.SMTP
+    options={'timeout':15}
+    if config['SECURITY']=='tls':options['context']=ssl.create_default_context()
+    smtp=client(config['HOST'],config['PORT'],**options)
+    try:
+        smtp.ehlo()
+        if config['SECURITY']=='starttls':
+            smtp.starttls(context=ssl.create_default_context());smtp.ehlo()
+        if config['USERNAME']:smtp.login(config['USERNAME'],config['PASSWORD'])
+        return smtp
+    except Exception:
+        smtp.close()
+        raise
+
+
+def check_mail_connection(config=None):
+    with smtp_connection(config or mail_config()) as smtp:
+        code,_=smtp.noop()
+        if code!=250:raise a.ServiceError('SMTP connection check failed',502)
+    return {'ok':True,'message':'SMTP TLS and configured authentication verified. No email was sent; inbox delivery is not yet verified.'}
+
+
 def send_email(config, email, token):
     message=EmailMessage()
     message['From']=config['FROM'];message['To']=email;message['Subject']='Reset your Olamide Olatayo Bello password'
     message.set_content('Use this link within 15 minutes to choose a new password:\n\n'+link(token)+'\n\nIf you did not request this, you can ignore this message. Your password has not changed.')
-    client=smtplib.SMTP_SSL if config['SECURITY']=='tls' else smtplib.SMTP
-    options={'timeout':15}
-    if config['SECURITY']=='tls':options['context']=ssl.create_default_context()
-    with client(config['HOST'],config['PORT'],**options) as smtp:
-        if config['SECURITY']=='starttls':smtp.starttls(context=ssl.create_default_context())
-        if config['USERNAME']:smtp.login(config['USERNAME'],config['PASSWORD'])
+    with smtp_connection(config) as smtp:
         smtp.send_message(message)
 
 
@@ -127,3 +145,4 @@ def authenticated(c, user, body, admin=False):
     c.execute("UPDATE password_resets SET delivery='administrator' WHERE token_hash=?",(digest,))
     a.audit(c,user['id'],'Administrator issued password recovery for user '+str(target['id']))
     return {'ok':True,'reset_url':link(token),'expires_in':900}
+

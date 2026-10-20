@@ -74,7 +74,10 @@ def validate(name,value):
 def check(provider):
  import advanced as a
  import marketplace as m
- if provider=='openai':
+ if provider=='smtp':
+  import password_reset
+  return password_reset.check_mail_connection()
+ elif provider=='openai':
   key=get('OPENAI_API_KEY','');model=get('SUPPORT_AI_MODEL','') or get('TAX_AI_MODEL','') or get('TAX_ANALYST_MODEL','')
   if not key or not model:raise a.ServiceError('Configure an OpenAI key and model first')
   a.request_json('https://api.openai.com/v1/models/'+a.identifier(model),headers={'Authorization':'Bearer '+key},method='GET')
@@ -141,7 +144,7 @@ def dispatch(path,method,body,c,user):
   return {'ok':True}
  if action=='test':
   provider=body.get('provider')
-  if provider not in ('openai','stripe','paystack','plaid'):raise a.ServiceError('Unsupported provider')
+  if provider not in ('smtp','openai','stripe','paystack','plaid'):raise a.ServiceError('Unsupported provider')
   started=time.monotonic()
   try:result=check(provider)
   except Exception:result={'ok':False,'message':'Connection check failed. Check credentials, environment, model access and provider status.'}
@@ -149,3 +152,4 @@ def dispatch(path,method,body,c,user):
   a.audit(c,user['id'],'Provider connection check '+provider+' '+str(result['ok']))
   return result
  raise a.ServiceError('Unsupported settings action')
+

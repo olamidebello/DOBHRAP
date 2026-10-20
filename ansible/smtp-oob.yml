@@ -1,0 +1,61 @@
+---
+- import_playbook: password-features-oob.yml
+
+- name: Configure encrypted password recovery SMTP
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  vars:
+    reset_service: oob-business.service
+  vars_prompt:
+    - name: smtp_password
+      prompt: 'SMTP provider password/app password (blank reuses saved credential)'
+      private: true
+      default: ''
+  tasks:
+    - name: Require local execution
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Prepare private SMTP input
+      ansible.builtin.tempfile:
+        state: file
+        prefix: oob-smtp-
+      register: smtp_input
+      no_log: true
+    - name: Configure SMTP and always remove temporary credentials
+      block:
+        - name: Write root-only input without exposing credentials
+          ansible.builtin.copy:
+            dest: '{{ smtp_input.path }}'
+            owner: root
+            group: root
+            mode: '0600'
+            content: >-
+              {{ {'SMTP_HOST': smtp_host | default(''),
+                  'SMTP_PORT': smtp_port | default('') | string,
+                  'SMTP_USERNAME': smtp_username | default(''),
+                  'SMTP_PASSWORD': smtp_password | default(''),
+                  'SMTP_FROM': smtp_from | default(''),
+                  'SMTP_SECURITY': smtp_security | default('')} | to_json }}
+          no_log: true
+        - name: Verify TLS and authentication then save encrypted GUI settings
+          ansible.builtin.command:
+            argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/configure-smtp.py, --config, '{{ smtp_input.path }}', --service, '{{ reset_service }}']
+          register: smtp_configuration
+          no_log: true
+      rescue:
+        - name: Explain configuration failure without disclosing credentials
+          ansible.builtin.fail:
+            msg: 'SMTP setup failed. Check provider credentials/app password, hostname, port, TLS and outbound access. Existing SMTP settings are retained when connection verification fails.'
+      always:
+        - name: Remove temporary SMTP input
+          ansible.builtin.file:
+            path: '{{ smtp_input.path }}'
+            state: absent
+          no_log: true
+    - name: Report SMTP readiness
+      ansible.builtin.debug:
+        msg:
+          - 'SMTP settings encrypted in the live database and visible in Provider provisioning & keys.'
+          - 'TLS and configured authentication verified. No service restart is required.'
+          - 'No test email was sent. Use Forgot password to request a recovery email and verify inbox delivery.'
