@@ -70,6 +70,38 @@ class WalletTests(unittest.TestCase):
    c.execute('UPDATE market_store SET open=1');c.commit()
    with self.assertRaises(a.ServiceError):market.dispatch('/api/market/checkout','POST',{'gateway':'wallet','product_id':'tax-analyst-session','request_key':str(uuid.uuid4())},c,{**self.user,'role':'viewer'},1)
 
+class BalanceFirstTests(WalletTests):
+ def auto(self,key=None):
+  with app.connect() as c:return market.dispatch('/api/market/checkout','POST',{'gateway':'auto','product_id':'tax-analyst-session','request_key':key or str(uuid.uuid4())},c,self.user,1)
+ def test_auto_deducts_and_retry_does_not_double_charge(self):
+  self.credit();key=str(uuid.uuid4());first=self.auto(key);self.assertEqual(first['state'],'fulfilled');self.auto(key)
+  self.assertEqual(self.status()['balances'][0]['balance'],500)
+ def test_shortfall_quote_does_not_deduct(self):
+  self.credit('2');quote=self.auto();self.assertEqual((quote['total'],quote['balance'],quote['remaining']),(500,200,300))
+  self.assertEqual(self.status()['balances'][0]['balance'],200)
+ def test_partial_payment_verified_once(self):
+  self.credit('2');key=str(uuid.uuid4());buyer={**self.user,'email':'synthetic@example.com'}
+  body={'gateway':'stripe','balance_first':True,'product_id':'tax-analyst-session','request_key':key}
+  with patch.object(market,'environment',return_value='live'),patch.object(market,'key',return_value='fixture'),patch.object(market,'base_url',return_value='https://example.com'),patch.object(market,'provider',return_value={'id':'cs_fixture','url':'https://checkout.stripe.com/test'}) as provider:
+   with app.connect() as c:order=market.dispatch('/api/market/checkout','POST',body,c,buyer,1)
+   self.assertEqual(provider.call_args.args[2]['line_items[0][price_data][unit_amount]'],300)
+   with app.connect() as c:market.dispatch('/api/market/checkout','POST',body,c,buyer,1)
+   self.assertEqual(provider.call_count,1);self.assertEqual(self.status()['balances'][0]['balance'],0)
+   payment={'id':'cs_fixture','client_reference_id':order['id'],'metadata':{'order_id':order['id']},'livemode':True,'payment_status':'paid','amount_total':300,'currency':'usd'}
+   with patch.object(market,'provider',return_value={**payment,'amount_total':500}):
+    with app.connect() as c:
+     with self.assertRaises(a.ServiceError):market.verify(c,order['id'])
+   with patch.object(market,'provider',return_value=payment):
+    with app.connect() as c:self.assertEqual(market.verify(c,order['id'])['state'],'fulfilled')
+    with app.connect() as c:market.verify(c,order['id']);self.assertEqual(billing.status(c,1,buyer)['available'],1)
+ def test_uncertain_provider_retains_one_contribution(self):
+  self.credit('2');body={'gateway':'stripe','balance_first':True,'product_id':'tax-analyst-session','request_key':str(uuid.uuid4())}
+  with patch.object(market,'environment',return_value='live'),patch.object(market,'key',return_value='fixture'),patch.object(market,'base_url',return_value='https://example.com'),patch.object(market,'provider',side_effect=RuntimeError('uncertain')):
+   with app.connect() as c:
+    with self.assertRaises(a.ServiceError):market.checkout(c,body,self.user,1)
+  self.assertEqual(self.status()['balances'][0]['balance'],0)
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM wallet_entries WHERE kind='purchase_partial'").fetchone()[0],1)
+
 class WalletHttpTests(unittest.TestCase):
  setUp=fixtures.TenantTests.setUp
  tearDown=fixtures.TenantTests.tearDown

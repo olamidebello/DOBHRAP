@@ -129,11 +129,18 @@ def checkout_url(value,gateway):
 def checkout(c,body,user,tenant_id):
     require_open(c)
     if not enabled():raise a.ServiceError('Marketplace checkout is disabled',503)
+    if body.get('gateway')=='auto':return __import__('wallet').automatic(c,body,user,tenant_id)
     if body.get('gateway')=='wallet':return __import__('wallet').checkout(c,body,user,tenant_id)
+    if user['role']=='viewer':raise a.ServiceError('Read-only accounts cannot purchase',403)
     gateway=body.get('gateway');key(gateway);env=environment()
     request_key=str(uuid.UUID(str(body.get('request_key',''))))
     product=c.execute('SELECT * FROM market_products WHERE id=? AND active=1',(body.get('product_id'),)).fetchone()
     if not product:raise a.ServiceError('Offer not available',404)
+    if body.get('balance_first'):
+        prior=c.execute('SELECT 1 FROM market_orders WHERE tenant_id=? AND owner=? AND request_key=?',(tenant_id,user['id'],request_key)).fetchone()
+        funds=c.execute('SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?',(user['id'],product['currency'])).fetchone()
+        if not prior and funds and funds['balance']>=product['amount']:
+            return __import__('wallet').checkout(c,{**body,'gateway':'wallet'},user,tenant_id)
     if product['currency']!=('USD' if gateway=='stripe' else 'NGN'):raise a.ServiceError('Choose a gateway matching the offer currency')
     now=int(time.time());c.execute('BEGIN IMMEDIATE')
     order=c.execute('SELECT * FROM market_orders WHERE tenant_id=? AND owner=? AND request_key=?',(tenant_id,user['id'],request_key)).fetchone()
@@ -149,6 +156,8 @@ def checkout(c,body,user,tenant_id):
                   (oid,tenant_id,user['id'],product['id'],product['name'],product['service_code'],product['amount'],product['currency'],gateway,env,request_key,now))
         snapshot_terms(c,oid,product['id'])
         order=c.execute('SELECT * FROM market_orders WHERE id=?',(oid,)).fetchone()
+        if body.get('balance_first'):__import__('wallet').reserve_partial(c,order,user)
+    payment_amount=order['amount']-__import__('wallet').contribution(c,order)
     c.execute("UPDATE market_orders SET state='creating',next_check=? WHERE id=?",(now+90,order['id']));c.commit()
     try:
         origin=base_url();return_url=origin+'/?market_order='+order['id']
@@ -156,11 +165,11 @@ def checkout(c,body,user,tenant_id):
             result=provider('stripe','/checkout/sessions',{'mode':'payment','success_url':return_url,'cancel_url':return_url,
                'client_reference_id':order['id'],'metadata[order_id]':order['id'],
                'line_items[0][price_data][currency]':order['currency'].lower(),
-               'line_items[0][price_data][unit_amount]':order['amount'],
+               'line_items[0][price_data][unit_amount]':payment_amount,
                'line_items[0][price_data][product_data][name]':order['name'],'line_items[0][quantity]':1},idempotency=order['id'])
             pid=a.identifier(result['id'],'cs_');url=checkout_url(result['url'],gateway)
         else:
-            result=provider('paystack','/transaction/initialize',{'email':user['email'],'reference':order['id'],'amount':order['amount'],
+            result=provider('paystack','/transaction/initialize',{'email':user['email'],'reference':order['id'],'amount':payment_amount,
                'currency':order['currency'],'callback_url':return_url,'metadata':{'order_id':order['id']}})
             if result.get('status') is not True:raise a.ServiceError('Checkout was not initialized',502)
             data=result['data'];pid=str(data['reference'])
@@ -191,7 +200,7 @@ def verify(c,order_id):
     if not paid:
         c.execute('UPDATE market_orders SET next_check=?,error=? WHERE id=?',(int(time.time())+900,'Payment not confirmed; no service activated.',row['id']))
         return {'id':row['id'],'state':row['state']}
-    if not matches or type(amount) is not int or amount!=row['amount'] or currency!=row['currency']:
+    if not matches or type(amount) is not int or amount!=row['amount']-__import__('wallet').contribution(c,row) or currency!=row['currency']:
         raise a.ServiceError('Payment reference, environment, amount or currency mismatch. Manual reconciliation required.',409)
     if not c.in_transaction:c.execute('BEGIN IMMEDIATE')
     tenant=c.execute('SELECT status FROM tenants WHERE id=?',(row['tenant_id'],)).fetchone()
@@ -299,7 +308,7 @@ def dispatch(path,method,body,c,user,tenant_id):
         a.audit(c,user['id'],'Marketplace offer saved '+pid);return {'id':pid}
     if route in ('orders','services') and method=='GET':
         table='market_orders' if route=='orders' else 'market_services'
-        fields='id,tenant_id,owner,product_id,name,amount,currency,gateway,environment,state,created,error' if route=='orders' else '*'
+        fields='id,tenant_id,owner,product_id,name,amount,currency,gateway,environment,state,created,error,checkout_url' if route=='orders' else '*'
         return [dict(r) for r in c.execute('SELECT '+fields+' FROM '+table+('' if admin else ' WHERE tenant_id=?')+' ORDER BY rowid DESC LIMIT 500',() if admin else (tenant_id,))]
     if route=='service-action' and method=='POST':
         if not admin:raise a.ServiceError('Super administrator required',403)
@@ -308,7 +317,8 @@ def dispatch(path,method,body,c,user,tenant_id):
         if not c.execute('SELECT 1 FROM market_services WHERE order_id=?',(body.get('order_id'),)).fetchone():raise a.ServiceError('Service not found',404)
         c.execute('UPDATE market_services SET work_state=?,status=CASE WHEN ?=\'suspended\' THEN \'suspended\' ELSE CASE WHEN environment IN (\'live\',\'coupon\',\'wallet\') THEN \'active\' ELSE \'test_active\' END END WHERE order_id=?',(body['work_state'],body['work_state'],body.get('order_id')))
         a.audit(c,user['id'],'Marketplace fulfillment updated '+str(body.get('order_id')));return {'ok':True}
-    if route=='checkout' and method=='POST' and body.get('gateway')=='wallet':return checkout(c,body,user,tenant_id)
+    if route=='checkout' and method=='POST' and body.get('gateway') in ('wallet','auto'):return checkout(c,body,user,tenant_id)
+    if body.get('balance_first') and route=='checkout' and method=='POST':return checkout(c,body,user,tenant_id)
     if user['role'] not in ('admin','super_admin'):
         analyst_order=(route=='checkout' and c.execute("SELECT 1 FROM market_products WHERE id=? AND service_code='tax_analyst_session'",(body.get('product_id'),)).fetchone()) or (route=='verify' and c.execute("SELECT 1 FROM market_orders WHERE id=? AND owner=? AND tenant_id=? AND service_code='tax_analyst_session'",(body.get('id'),user['id'],tenant_id)).fetchone())
         if user['role']!='editor' or not analyst_order:raise a.ServiceError('Workspace administrator required to purchase this service',403)

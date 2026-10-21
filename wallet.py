@@ -26,7 +26,7 @@ def minor(value,code):
 def status(c,user):
  balances=[dict(r) for r in c.execute('SELECT currency,balance FROM wallet_accounts WHERE owner=? ORDER BY currency',(user['id'],))]
  if not balances:balances=[{'currency':'USD','balance':0}]
- return {'balances':balances,'entries':[dict(r) for r in c.execute('SELECT id,currency,amount,kind,order_id,reason,created FROM wallet_entries WHERE owner=? ORDER BY created DESC,id DESC LIMIT 100',(user['id'],))],'notice':'Store credit can pay the full price of any available marketplace purchase in the same currency. No automatic currency conversion or split payment.'}
+ return {'balances':balances,'entries':[dict(r) for r in c.execute('SELECT id,currency,amount,kind,order_id,reason,created FROM wallet_entries WHERE owner=? ORDER BY created DESC,id DESC LIMIT 100',(user['id'],))],'notice':'Store credit can pay the full price of any available marketplace purchase in the same currency. Checkout uses your matching-currency balance first. Any remaining payment is confirmed by the payment provider before service activation.'}
 
 def credit(c,body,user):
  if user['role']!='super_admin':raise a.ServiceError('Super administrator required',403)
@@ -79,3 +79,41 @@ def admin(path,method,body,c,user):
  if route=='credit' and method=='POST':return credit(c,body,user)
  if route=='overview' and method=='GET':return {'users':[dict(r) for r in c.execute('SELECT u.id,u.email,u.role,u.tenant_id,t.name workspace FROM users u JOIN tenants t ON t.id=u.tenant_id ORDER BY u.email')],'balances':[dict(r) for r in c.execute('SELECT owner,currency,balance FROM wallet_accounts ORDER BY owner,currency')],'entries':[dict(r) for r in c.execute('SELECT * FROM wallet_entries ORDER BY created DESC,id DESC LIMIT 200')]}
  raise a.ServiceError('Wallet route not found',404)
+
+
+def automatic(c,body,user,tenant_id):
+ """Balance-first checkout; an insufficient balance is a quote, never a debit."""
+ import marketplace as market
+ market.require_open(c)
+ if not market.enabled():raise a.ServiceError('Marketplace checkout is disabled',503)
+ if user['role']=='viewer':raise a.ServiceError('Read-only accounts cannot purchase',403)
+ c.execute('BEGIN IMMEDIATE')
+ old=c.execute('SELECT * FROM market_orders WHERE tenant_id=? AND owner=? AND request_key=?',(tenant_id,user['id'],body.get('request_key'))).fetchone()
+ if old:
+  if old['product_id']!=body.get('product_id') or old['gateway']!='wallet':raise a.ServiceError('Purchase request already belongs to another order',409)
+  return {'id':old['id'],'state':old['state'],'reused':True}
+ p=c.execute('SELECT * FROM market_products WHERE id=? AND active=1',(body.get('product_id'),)).fetchone()
+ if not p:raise a.ServiceError('Offer unavailable',404)
+ row=c.execute('SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?',(user['id'],p['currency'])).fetchone()
+ available=max(0,row['balance'] if row else 0)
+ if available<p['amount']:
+  return {'state':'payment_required','currency':p['currency'],'total':p['amount'],'balance':available,'remaining':p['amount']-available}
+ c.commit()
+ return checkout(c,body,user,tenant_id)
+
+
+def contribution(c,order):
+ row=c.execute("SELECT amount FROM wallet_entries WHERE order_id=? AND owner=? AND currency=? AND kind='purchase_partial'",(order['id'],order['owner'],order['currency'])).fetchone()
+ return -row['amount'] if row else 0
+
+
+def reserve_partial(c,order,user):
+ """Persist a contribution with its order before contacting a live provider."""
+ if order['environment']!='live':return
+ row=c.execute('SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?',(user['id'],order['currency'])).fetchone()
+ amount=min(max(0,row['balance'] if row else 0),order['amount']-1)
+ if not amount:return
+ c.execute('UPDATE wallet_accounts SET balance=balance-? WHERE owner=? AND currency=? AND balance>=?',(amount,user['id'],order['currency'],amount))
+ c.execute('UPDATE cashout_funds SET available=(SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?) WHERE owner=? AND currency=? AND available>(SELECT balance FROM wallet_accounts WHERE owner=? AND currency=?)',(user['id'],order['currency'],user['id'],order['currency'],user['id'],order['currency']))
+ c.execute('INSERT INTO wallet_entries VALUES(?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),user['id'],order['currency'],-amount,'purchase_partial',order['id'],order['request_key'],user['id'],'Balance reserved for order; remaining payment pending',int(time.time())))
+ a.audit(c,user['id'],'Wallet contribution reserved '+order['id']+' '+str(amount))
