@@ -17,6 +17,7 @@
         status_code: 200
       loop:
         - {path: tax-analyst.js, marker: save-review-case}
+        - {path: tax-analyst.js, marker: delete-documents}
         - {path: tax-preparation.js, marker: analyst_review}
         - {path: tax-management.js, marker: analyst_review}
       register: tax_review_gui

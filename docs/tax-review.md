@@ -23,3 +23,11 @@ References used to design the question/source log:
 - https://www.irs.gov/businesses/small-businesses-self-employed/recordkeeping
 
 The organizer does not replace Form 8867, its required computations, or a preparer's professional due diligence.
+
+## Delete uploads and current records
+
+In Tax Analyst → Review your documents, use **Delete uploaded document**, or select documents and choose **Delete selected documents**. Bulk deletion validates every selected owner and revision before deleting anything. Active analyses must finish first. Confirmation removes the original encrypted upload, current extracted records/fields and associated queue jobs. A metadata-only deletion audit remains.
+
+**Clear extracted records only** removes current records, tax fields and generated review suggestions while retaining the original. This cancels queued jobs and does not automatically rerun analysis. Individual rows can also be removed in Review/edit records; **Save reviewed records** applies those changes.
+
+Saved compilation snapshots, downloaded copies and existing preparation drafts are independent; deleting an upload does not purge those copies or change their figures. Review and delete those separately where appropriate. Destructive actions block while there are unsaved edits or active uploads.

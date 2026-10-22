@@ -252,12 +252,39 @@ def dispatch(path,method,body,c,user):
  if route=='delete-build':
   if body.get('confirm')!='DELETE':raise a.ServiceError('Confirm DELETE')
   c.execute('DELETE FROM tax_analyst_builds WHERE id=? AND owner=?',(body.get('id'),user['id']));return {'ok':True}
+ if route=='delete-documents':
+  selected=body.get('documents')
+  if body.get('confirm')!='DELETE' or not isinstance(selected,list) or not 1<=len(selected)<=100:raise a.ServiceError('Confirm between 1 and 100 selected documents')
+  c.execute('BEGIN IMMEDIATE');checked=[];seen=set()
+  for item in selected:
+   if not isinstance(item,dict) or not isinstance(item.get('id'),str) or item['id'] in seen:raise a.ServiceError('Choose distinct existing documents')
+   r,p=read(c,item['id'],user)
+   if type(item.get('revision')) is not int or r['revision']!=item['revision']:raise a.ServiceError('Document changed; reload before deleting',409)
+   if r['state']=='analyzing':raise a.ServiceError('Analysis is running; wait before deleting',409)
+   seen.add(r['id']);checked.append(r['id'])
+  for did in checked:
+   c.execute('DELETE FROM tax_analysis_jobs WHERE document_id=? AND owner=?',(did,user['id']))
+   c.execute('DELETE FROM tax_analyst_documents WHERE id=? AND owner=?',(did,user['id']))
+   a.audit(c,user['id'],'Owner deleted tax analyst document '+did)
+  return {'ok':True,'deleted':checked,'notice':'Selected originals and current records deleted. Saved compilations and preparation drafts remain separate.'}
+ if route in ('delete','clear-records'):c.execute('BEGIN IMMEDIATE')
  r,p=read(c,body.get('id'),user)
  if route=='download':return {k:p[k] for k in ('name','type','base64')}
  if route=='delete':
   if body.get('confirm')!='DELETE':raise a.ServiceError('Confirm DELETE')
   if r['state']=='analyzing':raise a.ServiceError('Analysis is running; wait before deleting',409)
-  c.execute('DELETE FROM tax_analyst_documents WHERE id=?',(r['id'],));return {'ok':True}
+  if 'revision' in body and body['revision']!=r['revision']:raise a.ServiceError('Document changed; reload before deleting',409)
+  c.execute('DELETE FROM tax_analysis_jobs WHERE document_id=? AND owner=?',(r['id'],user['id']))
+  c.execute('DELETE FROM tax_analyst_documents WHERE id=? AND owner=?',(r['id'],user['id']))
+  a.audit(c,user['id'],'Owner deleted tax analyst document '+r['id']);return {'ok':True}
+ if route=='clear-records':
+  if body.get('confirm')!='CLEAR':raise a.ServiceError('Confirm CLEAR')
+  if r['state']=='analyzing':raise a.ServiceError('Analysis is running; wait before clearing records',409)
+  if type(body.get('revision')) is not int or body['revision']!=r['revision']:raise a.ServiceError('Document changed; reload before clearing records',409)
+  p.update(records=[],tax_fields=[],opportunities=[],coverage={},notice='Current extracted records cleared. Original document retained; saved compilations and preparation drafts are separate.')
+  c.execute("UPDATE tax_analysis_jobs SET state='cancelled',finished=? WHERE document_id=? AND owner=? AND state IN ('queued','running')",(int(time.time()),r['id'],user['id']))
+  c.execute("UPDATE tax_analyst_documents SET payload=?,revision=revision+1,state='review' WHERE id=? AND owner=? AND revision=?",(a.seal(p),r['id'],user['id'],r['revision']))
+  a.audit(c,user['id'],'Owner cleared tax analyst records '+r['id']);r,p=read(c,r['id'],user);return public(r,p)
  if route=='save':
   if r['state']=='analyzing':raise a.ServiceError('Analysis is running; wait before editing',409)
   rows=body.get('records')
