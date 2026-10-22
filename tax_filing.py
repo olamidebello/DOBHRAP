@@ -85,7 +85,7 @@ def read(c,user,did):
  return row,a.unseal(row['payload'])
 
 def view(row,payload):
- return {**{k:row[k] for k in ('id','year','form','revision','state','created','updated')},'data':payload['data'],'source_build':payload.get('source_build'),'review':calculation(row['year'],row['form'],payload['data'])}
+ return {**{k:row[k] for k in ('id','year','form','revision','state','created','updated')},'data':payload['data'],'source_build':payload.get('source_build'),'analyst_review':payload.get('analyst_review',{}),'review':calculation(row['year'],row['form'],payload['data'])}
 
 def dispatch(path,method,body,c,user):
  if not path.startswith('/api/tax-filing/'):return None
@@ -126,7 +126,7 @@ def dispatch(path,method,body,c,user):
    if key:totals[key]+=amount(f['value'])
   for key,value in totals.items():d[key]=format(Decimal(value)/100,'.2f')
   for key in CHECKS:d[key]=False
-  p['source_build']=body['build_id'];p['data']=clean(d)
+  p['analyst_review']=build.get('analyst_review',{});p['source_build']=body['build_id'];p['data']=clean(d)
  elif route=='archive':
   if type(body.get('archived')) is not bool:raise a.ServiceError('Choose archive status')
  else:raise a.ServiceError('Return route not found',404)

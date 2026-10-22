@@ -332,7 +332,7 @@ def view(c,row,data):
   meta=a.unseal(d['payload']);docs.append({'id':d['id'],'name':meta['name'],'type':meta['type'],'document_type':meta.get('document_type','Other'),'size':d['size']})
  payload['auto_ai_consent']=data.get('auto_ai_consent',False);job=c.execute('SELECT state FROM tax_suggestion_jobs WHERE return_id=? ORDER BY requested DESC,rowid DESC LIMIT 1',(row['id'],)).fetchone();payload['ai_suggestion_status']=job['state'] if job else 'off';payload['documents']=docs;ai=latest_ai_review(c,row['id'],data)
  if ai.get('digest') and ai['digest']!=hashlib.sha256(json.dumps(data.get('data',{}),sort_keys=True).encode()).hexdigest():ai={'state':'outdated','notice':'Preparation changed; these AI suggestions require a new review.'}
- payload['ai_review']=ai;payload['refund_review']=data.get('refund_review',{});return payload
+ payload['analyst_review']=data.get('analyst_review',{});payload['ai_review']=ai;payload['refund_review']=data.get('refund_review',{});return payload
 
 AMEND_FIELDS={'agi':'Adjusted gross income','taxable_income':'Taxable income','total_tax':'Total tax','total_payments':'Total payments'}
 def amendment_view(row,p):
@@ -495,7 +495,7 @@ def dispatch(path,method,body,c,user):
   if not doc:raise a.ServiceError('Document not found',404)
   if route=='document-download':return a.unseal(doc['payload'])
   c.execute('DELETE FROM tax_draft_documents WHERE id=?',(doc['id'],));a.audit(c,user['id'],'Private tax document removed '+doc['id']);return {'ok':True}
- if route=='export':return {'kind':str(row['year'])+' preparation worksheet — NOT FOR FILING','tax_year':row['year'],'data':mask(data),'refund_review':payload.get('refund_review',{}),'review':review(data,payload.get('completed',[]),row['year']),'sources':tax_rules.sources(row['year'])}
+ if route=='export':return {'kind':str(row['year'])+' preparation worksheet — NOT FOR FILING','tax_year':row['year'],'data':mask(data),'analyst_review':payload.get('analyst_review',{}),'refund_review':payload.get('refund_review',{}),'review':review(data,payload.get('completed',[]),row['year']),'sources':tax_rules.sources(row['year'])}
  if route=='delete':
   if body.get('confirm')!='DELETE':raise a.ServiceError('Confirm DELETE to remove this preparation')
   c.execute('DELETE FROM tax_drafts WHERE id=? AND owner=?',(row['id'],user['id']));a.audit(c,user['id'],'Private tax preparation deleted '+row['id']);return {'ok':True}

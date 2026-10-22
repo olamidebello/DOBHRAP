@@ -56,6 +56,10 @@ jobs:
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-filing-suite-oob.yml
       - name: Check wallet deployment syntax
         run: ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/wallet-marketplace-oob.yml
+      - name: Check evidence-linked review deployment and interactions
+        run: |
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-review-oob.yml
+          node tests/tax-analyst-guide-ui.cjs
       - name: Start synthetic test server
         run: |
           python tests/browser_fixture.py > /tmp/oob-browser-server.log 2>&1 &

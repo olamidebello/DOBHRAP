@@ -77,6 +77,7 @@ def automation_summary(docs,y):
  'notice':'W-2 Box 2 is withholding, not a minimum refund or a deduction. Target is a comparison only. Review all source pages, duplicates and eligibility; no maximum refund is certified. Extracted coverage and AI questions are unverified.'}
 
 def initialize(c):
+ c.execute('CREATE TABLE IF NOT EXISTS tax_analyst_cases(owner INTEGER NOT NULL,year INTEGER NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(owner,year))')
  c.execute("CREATE TABLE IF NOT EXISTS tax_analysis_jobs(id TEXT PRIMARY KEY,document_id TEXT NOT NULL,owner INTEGER NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'queued',requested INTEGER NOT NULL,started INTEGER NOT NULL DEFAULT 0,finished INTEGER,UNIQUE(document_id,revision))")
  c.executescript('''CREATE TABLE IF NOT EXISTS tax_analyst_documents(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,year INTEGER NOT NULL,payload TEXT NOT NULL,size INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 1,state TEXT NOT NULL DEFAULT 'uploaded',requested INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS tax_analyst_runs(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,requested INTEGER NOT NULL);
@@ -183,6 +184,8 @@ def dispatch(path,method,body,c,user):
   builds=[{'id':r['id'],'year':r['year'],'created':r['created'],**a.unseal(r['payload'])} for r in c.execute('SELECT * FROM tax_analyst_builds WHERE owner=? ORDER BY created DESC',(user['id'],))]
   return {**prep.year_catalog(),'documents':docs,'builds':builds,'automation_jobs':[dict(j) for j in c.execute('SELECT id,document_id,revision,state,requested,started,finished FROM tax_analysis_jobs WHERE owner=? ORDER BY requested DESC LIMIT 100',(user['id'],))],'groups':group_documents(docs),'kinds':KINDS,'categories':CATEGORIES,'irs_candidates':list(reports.CANDIDATES),'document_types':DOCUMENT_TYPES,'policy':{k:v for k,v in controls.policy().items() if k in ('analysis_enabled','uploads_enabled','queue_enabled','worker_enabled','daily_requests','max_file_bytes','document_limit')},'ai_enabled':controls.policy()['analysis_enabled'] and settings.get('DOBHRAP_ENABLE_TAX_ANALYST')=='1' and bool(settings.get('OPENAI_API_KEY')) and bool(settings.get('TAX_ANALYST_MODEL') or settings.get('TAX_AI_MODEL'))}
  if method!='POST':raise a.ServiceError('Analyst route not found',404)
+ if route=='review-case':return review_case(c,body,user)
+ if route=='save-review-case':return review_case(c,body,user,save=True)
  if route=='queue-analysis':return queue_analysis(c,body,user)
  if route=='cancel-analysis':
   y=year(body.get('year'))
@@ -300,7 +303,8 @@ def compile_year(c,body,user):
    if fingerprint in fingerprints:raise a.ServiceError('Possible duplicate approved transactions; exclude or correct before compiling')
    fingerprints.add(fingerprint);records.append({**item,'document_id':r['id']})
  if not records and not fields:raise a.ServiceError('Approve at least one classified tax record or tax form field')
- records.sort(key=lambda x:(x['document_id'],x['id']));digest=hashlib.sha256(json.dumps({'records':records,'tax_fields':fields},sort_keys=True).encode()).hexdigest()
+ analyst_review=review_case(c,{'year':y},user)
+ records.sort(key=lambda x:(x['document_id'],x['id']));digest=hashlib.sha256(json.dumps({'records':records,'tax_fields':fields,'analyst_review':analyst_review},sort_keys=True).encode()).hexdigest()
  existing=c.execute('SELECT * FROM tax_analyst_builds WHERE owner=? AND year=? AND digest=?',(user['id'],y,digest)).fetchone()
  if existing:return {'id':existing['id'],**a.unseal(existing['payload']),'reused':True}
  totals={'reported_income_cents':0,'business_receipts_cents':0,'business_expense_intake_cents':0}
@@ -343,8 +347,8 @@ def compile_year(c,body,user):
   if totals['business_receipts_cents'] or totals['business_expense_intake_cents']:
    data['businesses']=[{'_row_id':str(uuid.uuid4()),'name':'Analyst business intake — reconcile by business','receipts':str(Decimal(totals['business_receipts_cents'])/100),'expenses':str(Decimal(totals['business_expense_intake_cents'])/100),'owners':'User-approved bank/receipt intake, not verified deduction eligibility. Reconcile documents, allocate separate businesses, inventory, assets and personal use.'}]
   data=prep.clean(data,{},y)
-  c.execute('INSERT INTO tax_drafts(id,owner,year,payload,created,updated) VALUES(?,?,?,?,?,?)',(draft_id,user['id'],y,a.seal({'data':data,'completed':[],'analyst_build':bid}),now,now))
- result={'analysis_report':reports.build([{'id':'compilation','name':'Approved compilation','year':y,'state':'review','records':records,'tax_fields':fields}],y),'year':y,'draft_id':draft_id,'records':records,'tax_fields':fields,'totals':totals,'unapproved_excluded':pending,'notice':'Yearly preparation compilation — NOT FOR FILING. No complete refund/tax computation or IRS return. Withholding is not inferred from bank deposits. Reconcile gross income and tax forms. Only W-2 boxes 1/2, 1099-INT boxes 1/4 and 1099-DIV boxes 1a/1b/4 map automatically; all other approved fields remain in this compilation for manual preparation. Six-year guided intake is available. Year-specific calculation rules are limited; no official filing package is generated.'}
+  c.execute('INSERT INTO tax_drafts(id,owner,year,payload,created,updated) VALUES(?,?,?,?,?,?)',(draft_id,user['id'],y,a.seal({'data':data,'completed':[],'analyst_build':bid,'analyst_review':analyst_review}),now,now))
+ result={'analyst_review':analyst_review,'analysis_report':reports.build([{'id':'compilation','name':'Approved compilation','year':y,'state':'review','records':records,'tax_fields':fields}],y),'year':y,'draft_id':draft_id,'records':records,'tax_fields':fields,'totals':totals,'unapproved_excluded':pending,'notice':'Yearly preparation compilation — NOT FOR FILING. No complete refund/tax computation or IRS return. Withholding is not inferred from bank deposits. Reconcile gross income and tax forms. Only W-2 boxes 1/2, 1099-INT boxes 1/4 and 1099-DIV boxes 1a/1b/4 map automatically; all other approved fields remain in this compilation for manual preparation. Six-year guided intake is available. Year-specific calculation rules are limited; no official filing package is generated.'}
  if c.execute('SELECT count(*) FROM tax_analyst_builds WHERE owner=?',(user['id'],)).fetchone()[0]>=40:raise a.ServiceError('Compilation limit reached')
  c.execute('INSERT INTO tax_analyst_builds VALUES(?,?,?,?,?,?)',(bid,user['id'],y,digest,a.seal(result),now));a.audit(c,user['id'],'Private tax analyst compilation '+bid);return {'id':bid,**result,'reused':False}
 
@@ -377,3 +381,94 @@ def analyze_document(c,body,user,r,p):
  if state=='review':billing.finish(c,user,session_order,True)
  r,p=read(c,r['id'],user);return public(r,p)
 
+
+# Organizational review support, never a tax-liability or filing-readiness engine.
+REVIEW_AREAS={
+ 'identity':'Confirm taxpayer identity, authority and tax year',
+ 'filing_status':'Review filing status, household and residency facts',
+ 'dependents':'Review dependent relationships, residency and support',
+ 'income':'Reconcile income forms, books, bank activity and transfers',
+ 'business':'Separate businesses, personal use, inventory and asset records',
+ 'deductions':'Check deduction evidence, eligibility and limitations',
+ 'credits':'Ask credit eligibility questions and retain computations',
+ 'payments':'Reconcile withholding and estimated payments to evidence',
+ 'prior_year':'Review prior returns, carryovers and changes',
+ 'state_local':'Identify state/local jurisdictions and separate requirements',
+ 'foreign':'Identify foreign income, assets and reporting questions',
+ 'amendments':'Review corrections and notices against filed originals',
+ 'deadlines':'Confirm applicable filing/payment deadlines and extensions',
+ 'final_review':'Review computations, required schedules and unresolved items',
+ 'authorization':'Obtain required client review, signatures and filing authorization',
+ 'delivery':'Deliver and retain records; track actual filing acknowledgment separately'}
+
+def review_findings(docs,y):
+ findings=[];seen={}
+ def add(code,doc,message):findings.append({'code':code,'document_id':doc['id'],'document':doc['name'],'message':message})
+ for d in docs:
+  rows=d.get('records') or [];fields=d.get('tax_fields') or []
+  if d['state']=='failed':add('analysis_failed',d,'Analysis failed. Review the original and choose an explicit retry or manual entry.')
+  if not rows and not fields:add('no_entries',d,'No extracted or manually entered records. Check whether this document still needs analysis.')
+  if not (d.get('coverage') or {}).get('model_reported_complete'):add('coverage',d,'Page and line coverage is not established. Compare all original pages.')
+  if any(not r.get('approved') for r in rows+fields):add('unreviewed',d,'One or more entries still require your review and approval.')
+  for i,r in enumerate(rows):
+   label='Record '+str(i+1)+': '
+   if not r.get('evidence'):add('evidence',d,label+'record a source page, line or document reference.')
+   if not r.get('date') or not str(r['date']).startswith(str(y)+'-'):add('year',d,label+'confirm the date belongs to this tax year.')
+   if r.get('currency')!='USD':add('currency',d,label+'USD conversion and exchange-rate evidence need manual review.')
+   if r.get('kind')=='unknown' or r.get('category')=='unclassified':add('classification',d,label+'resolve the transaction classification.')
+   if r.get('kind')=='expense' and not r.get('business_percent'):add('business_use',d,label+'confirm business use; do not assume deductibility.')
+   fingerprint=(r.get('date'),r.get('amount'),r.get('currency'),r.get('kind'),str(r.get('description','')).strip().casefold())
+   if fingerprint in seen:add('possible_duplicate',d,label+'matches another entry in '+seen[fingerprint]+'. Reconcile; do not automatically delete.')
+   else:seen[fingerprint]=d['name']
+  for i,f in enumerate(fields):
+   if f.get('year')!=y:add('field_year',d,'Tax field '+str(i+1)+': confirm the tax year.')
+   if not f.get('evidence'):add('field_evidence',d,'Tax field '+str(i+1)+': add a source box or page reference.')
+  if rows and fields:add('overlap',d,'Both transaction records and form boxes are present. Check that amounts are not counted twice.')
+  for o in d.get('opportunities') or []:add('eligibility_question',d,str(o.get('topic','Review question'))+': '+str(o.get('question','')))
+ return findings
+
+def review_case(c,body,user,save=False):
+ y=year(body.get('year'));uid=user['id'];now=int(time.time())
+ if save:
+  data=body.get('data')
+  if not isinstance(data,dict):raise a.ServiceError('Review case must contain structured data')
+  profile=data.get('profile','personal')
+  if profile not in ('personal','self_employed','partnership','s_corporation','corporation'):raise a.ServiceError('Choose a supported intake profile')
+  notes=data.get('notes','');areas=data.get('areas',{});tasks=data.get('tasks',[])
+  if not isinstance(notes,str) or len(notes)>12000 or not isinstance(areas,dict) or not isinstance(tasks,list) or len(tasks)>50:raise a.ServiceError('Review case exceeds its allowed limits')
+  clean_areas={}
+  for key,value in areas.items():
+   if key not in REVIEW_AREAS or not isinstance(value,dict) or value.get('status') not in ('open','reviewed','not_applicable'):raise a.ServiceError('Invalid review checklist entry')
+   detail=value.get('notes','')
+   if not isinstance(detail,str) or len(detail)>1500:raise a.ServiceError('Checklist notes must contain at most 1500 characters')
+   if value['status']!='open' and not detail.strip():raise a.ServiceError('Record supporting notes before marking a review item reviewed or not applicable')
+   clean_areas[key]={'status':value['status'],'notes':detail}
+  clean_tasks=[];ids=set()
+  for task in tasks:
+   if not isinstance(task,dict):raise a.ServiceError('Invalid document request')
+   tid=str(task.get('id',''))
+   try:tid=str(uuid.UUID(tid))
+   except ValueError:raise a.ServiceError('Document request needs a valid identifier') from None
+   text=task.get('text','');due=task.get('due','');status=task.get('status','open');evidence=task.get('evidence','')
+   if tid in ids or not isinstance(text,str) or not 1<=len(text.strip())<=300 or status not in ('open','requested','received','not_applicable') or not isinstance(evidence,str) or len(evidence)>1500:raise a.ServiceError('Invalid document request or evidence')
+   if status in ('received','not_applicable') and not evidence.strip():raise a.ServiceError('Explain received or not-applicable document requests')
+   if not isinstance(due,str):raise a.ServiceError('Invalid follow-up date')
+   if due:
+    try:datetime.date.fromisoformat(due)
+    except ValueError:raise a.ServiceError('Use a valid follow-up date') from None
+   ids.add(tid);clean_tasks.append({'id':tid,'text':text.strip(),'due':due,'status':status,'evidence':evidence})
+  revision=body.get('revision')
+  if type(revision) is not int or revision<0:raise a.ServiceError('Reload the review case first')
+  payload=a.seal({'profile':profile,'notes':notes,'areas':clean_areas,'tasks':clean_tasks})
+  c.execute('BEGIN IMMEDIATE')
+  if revision==0:
+   if c.execute('INSERT OR IGNORE INTO tax_analyst_cases(owner,year,revision,payload,updated) VALUES(?,?,1,?,?)',(uid,y,payload,now)).rowcount!=1:raise a.ServiceError('Review case changed; reload before saving',409)
+  elif c.execute('UPDATE tax_analyst_cases SET revision=revision+1,payload=?,updated=? WHERE owner=? AND year=? AND revision=?',(payload,now,uid,y,revision)).rowcount!=1:raise a.ServiceError('Review case changed; reload before saving',409)
+  a.audit(c,uid,'Tax review case saved '+str(y)+' revision '+str(revision+1))
+ row=c.execute('SELECT * FROM tax_analyst_cases WHERE owner=? AND year=?',(uid,y)).fetchone()
+ data=a.unseal(row['payload']) if row else {'profile':'personal','notes':'','areas':{},'tasks':[]}
+ docs=[public(r,a.unseal(r['payload'])) for r in c.execute('SELECT * FROM tax_analyst_documents WHERE owner=? AND year=? ORDER BY created,id',(uid,y))]
+ findings=review_findings(docs,y)
+ report=reports.build(docs,y)
+ benefits=[{'topic':line['destination'],'preparation_step':'businesses' if line.get('candidate') in ('business_receipts','advertising','office','supplies','professional','utilities','insurance','rent','repairs','travel','meals','vehicle','asset') else 'income' if line.get('candidate') in ('wages','interest','dividends','other_income') or line.get('form')=='Form 1040' else 'deductions','document_id':line['document_id'],'source':line['source'],'question':line['question'],'amount_as_recorded':line['amount'],'currency':line['currency'],'approved':line['approved'],'eligibility_confirmed':False} for line in report['lines'] if line.get('candidate')!='excluded']
+ return {'year':y,'revision':row['revision'] if row else 0,'updated':row['updated'] if row else None,'data':data,'benefit_review':benefits,'recommendations':report['recommendations'],'area_labels':REVIEW_AREAS,'findings':findings,'summary':{'documents':len(docs),'open_findings':len(findings),'open_requests':sum(t['status'] in ('open','requested') for t in data['tasks']),'unreviewed_areas':sum(data['areas'].get(k,{}).get('status','open')=='open' for k in REVIEW_AREAS)},'filing_ready':False,'notice':'Review organizer and handoff only. Checklist completion does not establish eligibility, due-diligence compliance, complete tax calculations, or filing readiness. State/local returns, complete federal computations, signatures and actual transmission require supported preparation and filing services.','references':['https://www.irs.gov/tax-professionals/eitc-central/due-diligence-requirements-for-knowledge-and-recordkeeping','https://www.irs.gov/businesses/small-businesses-self-employed/recordkeeping']}

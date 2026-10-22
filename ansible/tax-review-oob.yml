@@ -1,0 +1,32 @@
+---
+- import_playbook: wallet-marketplace-oob.yml
+
+- name: Verify evidence-linked tax review and preparation handoff
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify encrypted review organizer schema in every active backend
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/check-tax-review.py]
+      changed_when: false
+    - name: Verify served analyst and preparation interfaces
+      ansible.builtin.uri:
+        url: 'https://olamideolatayobello.com/{{ item.path }}'
+        return_content: true
+        status_code: 200
+      loop:
+        - {path: tax-analyst.js, marker: save-review-case}
+        - {path: tax-preparation.js, marker: analyst_review}
+        - {path: tax-management.js, marker: analyst_review}
+      register: tax_review_gui
+      failed_when: item.marker not in tax_review_gui.content
+      changed_when: false
+    - name: Report verified scope
+      ansible.builtin.debug:
+        msg:
+          - 'Tax Analyst: guided upload/review/build, search, filters, encrypted yearly review notes and document requests.'
+          - 'Approved compilations carry source-linked benefit questions and review notes into individual and federal return workspaces.'
+          - 'Existing amounts and eligibility are never silently changed by review questions. Recompile and reimport to refresh an older snapshot.'
+          - 'Complete deduction/credit calculation, state returns and filing remain outside the supported engine. No maximum refund is certified.'
+          - 'No taxpayer documents were sent to an AI provider by this verification.'
