@@ -24,6 +24,8 @@ const assert=require('assert');
   await page.locator('#login [data-password-visibility]').uncheck();
   assert.equal(await field.getAttribute('type'),'password');
   await login(initial);
+  await page.locator('#content').getByRole('heading',{name:'Business overview',exact:true}).waitFor();
+  await page.locator('#nav-toggle').click();
   await page.locator('#nav [data-page=users]').click();
   const form=page.locator('#admin-password-reset');
   await form.locator('[name=email]').fill('ui@example.com');
