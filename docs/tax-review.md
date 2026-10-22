@@ -31,3 +31,7 @@ In Tax Analyst → Review your documents, use **Delete uploaded document**, or s
 **Clear extracted records only** removes current records, tax fields and generated review suggestions while retaining the original. This cancels queued jobs and does not automatically rerun analysis. Individual rows can also be removed in Review/edit records; **Save reviewed records** applies those changes.
 
 Saved compilation snapshots, downloaded copies and existing preparation drafts are independent; deleting an upload does not purge those copies or change their figures. Review and delete those separately where appropriate. Destructive actions block while there are unsaved edits or active uploads.
+
+## Upload access and paid sessions
+
+The upload screen explains why access is locked (no unused session, uploads paused, or an active batch). Consent and configured AI do not substitute for a paid session. Users can buy one session with their account balance directly on the screen without losing selected files, or refresh session access after payment without reloading. An insufficient balance shows the exact shortfall without deduction. Online checkout continues through Marketplace; users must remove unuploaded files from the queue before leaving and select them again afterward. Pending-analysis and background-analysis controls reflect current access.

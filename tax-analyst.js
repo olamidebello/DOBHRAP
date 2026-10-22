@@ -32,6 +32,10 @@ async function showTaxAnalyst(){
   const next=root.querySelector('#analyst-next');next.textContent=!hasSession&&!yearDocs.length?'Get analysis sessions':!yearDocs.length?'Start: upload documents':failed?'Review documents needing attention':review?'Review next document':approved?'Build my worksheet':running?'Check analysis progress':'Review or analyze documents';
   next.onclick=()=>{if(!hasSession&&!yearDocs.length){show('marketplace');return}if(!yearDocs.length){jump('upload');return}if(failed){root.querySelector('#analyst-filter').value='failed';render();jump('review');return}const doc=yearDocs.find(needsReview);if(doc){edit(doc);return}jump(approved?'build':'review')};
   const upload=root.querySelector('#analyst-upload-selected');upload.disabled=!hasSession||state.policy?.uploads_enabled===false||batchBusy;upload.title=!hasSession?'Purchase and verify a session first':state.policy?.uploads_enabled===false?'Uploads are paused by the administrator':'';
+  const help=root.querySelector('#analyst-upload-help');if(help){help.textContent=state.policy?.uploads_enabled===false?'Uploads are paused by the administrator. Your file has not been uploaded.':!hasSession?'Upload is locked because your account has no unused Tax Analyst session. AI is configured, but consent alone does not unlock a paid session. Buy one below, or refresh access after payment.':batchBusy?'Uploading documents. Please wait.':'Upload access is ready. Choose files, then select Upload selected documents. For background analysis, enable the option above and confirm consent.';root.querySelector('#analyst-buy-inline').hidden=hasSession||session.purchase_available===false||state.policy?.uploads_enabled===false;}
+  root.querySelector('#analyst-analyze-pending').disabled=!state.ai_enabled||batchBusy;
+  const auto=root.querySelector('#analyst-auto');auto.disabled=!state.ai_enabled||state.policy?.queue_enabled===false;if(auto.disabled)auto.checked=false;
+
  }
  root.querySelector('#analyst-guide').insertAdjacentHTML('beforeend','<button id="analyst-case-open">Open my tax review organizer</button><div id="analyst-case-panel" hidden></div>');
  let currentCase=null;
@@ -48,6 +52,19 @@ async function showTaxAnalyst(){
  }
  function taskHtml(t){return '<fieldset data-case-task="'+esc(t.id)+'"><legend>Document request</legend><label>What is missing?<input name="text" required maxlength="300" value="'+esc(t.text)+'"></label><label>Status<select name="status">'+['open','requested','received','not_applicable'].map(v=>'<option '+(t.status===v?'selected':'')+'>'+v+'</option>').join('')+'</select></label><label>Follow-up date<input name="due" type="date" value="'+esc(t.due)+'"></label><label>Source, response or explanation<textarea name="evidence" maxlength="1500">'+esc(t.evidence)+'</textarea></label></fieldset>'}
 
+ root.querySelector('#analyst-upload-selected').insertAdjacentHTML('beforebegin','<div id="analyst-upload-access"><p id="analyst-upload-help" role="status" aria-live="polite"></p><button id="analyst-buy-inline">Buy one session using account balance</button><button id="analyst-recheck-access">Check payment / refresh access</button><p id="analyst-inline-payment" role="status"></p></div>');
+ root.querySelector('#analyst-upload-selected').setAttribute('aria-describedby','analyst-upload-help');
+ root.querySelector('#analyst-recheck-access').onclick=()=>safeRun(async()=>{const button=root.querySelector('#analyst-recheck-access');button.disabled=true;try{await refreshSession();render();message(hasSession?'Session access refreshed. Your selected files are still in the queue.':'No unused session found. Purchase a session or verify the pending order.')}finally{button.disabled=false}});
+ root.querySelector('#analyst-buy-inline').onclick=()=>safeRun(async()=>{
+  if(batchBusy)throw Error('Wait for the current upload to finish');
+  const button=root.querySelector('#analyst-buy-inline'),output=root.querySelector('#analyst-inline-payment');button.disabled=true;
+  const storage='oob-analyst-session-'+currentUserId+'-'+currentTenantId;let request_key=sessionStorage.getItem(storage);if(!request_key){request_key=crypto.randomUUID();sessionStorage.setItem(storage,request_key)}
+  try{const result=await api('market/checkout',{product_id:session.product_id||'tax-analyst-session',gateway:'auto',request_key});
+   if(result.state==='fulfilled'){sessionStorage.removeItem(storage);await refreshSession();render();if(typeof refreshWalletBadge==='function')await refreshWalletBadge();output.textContent='Session purchased from account balance. Your selected files are still here. You can upload now.'}
+   else if(result.state==='payment_required'){output.textContent='Additional payment required: '+formatMoneyMinor(result.remaining,result.currency)+'. No balance was deducted. To use an online payment method, first remove these unuploaded files from the queue, purchase a session in Marketplace, then select the files again. If you have already paid, open your order and verify it.'}
+   else output.textContent='Purchase status: '+result.state+'. Verify your order before retrying.';
+  }finally{button.disabled=false}
+ });
  const queue=taxDocumentQueue(root.querySelector('#analyst-file'),root.querySelector('#analyst-upload-queue'),state.document_types,()=>({type:root.querySelector('#analyst-document-type').value,custom:root.querySelector('#analyst-custom-type').value}));
  async function refreshSession(){Object.assign(session,await api('tax-analyst/billing'));hasSession=session.admin_exempt||session.available>0;state.ai_enabled=configuredAI&&hasSession;const label=root.querySelector('#analyst-session-summary');if(label)label.textContent=formatMoneyMinor(session.price_cents,'USD')+' per document · '+session.available+' available · '+session.reserved+' running · '+session.used+' completed'+(session.admin_exempt?' · Super admin operations are exempt':'')}
  const currentYear=()=>Number(root.querySelector('#analyst-year').value);
