@@ -227,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
     self.reply(200,result);return
    if self.command=='POST':
     size=int(self.headers.get('Content-Length',0))
-    if not 0<=size<=(3_000_000 if path in ('/api/tax-prep/document','/api/tax-analyst/upload','/api/tax-record-upload') else 1_000_000 if path=='/api/tax-analyst/save' else 100000): self.reply(413,{'error':'Request too large'}); return
+    if not 0<=size<=(3_000_000 if path in ('/api/tax-prep/document','/api/tax-analyst/upload','/api/tax-analyst/quote-upload','/api/tax-record-upload') else 1_000_000 if path=='/api/tax-analyst/save' else 100000): self.reply(413,{'error':'Request too large'}); return
     body=json.loads(self.rfile.read(size) or b'{}')
     if not isinstance(body,dict):raise ValueError('Expected a JSON object')
    with ExitStack() as stack:

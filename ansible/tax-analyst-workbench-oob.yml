@@ -1,0 +1,42 @@
+---
+# Run on hosting, never the SIP server. Existing staged deployment preserves DB/key backups.
+- import_playbook: tax-review-oob.yml
+
+- name: Verify expanded Tax Analyst workbench, pricing and administration
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify live tenant schemas and document conversion resources
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/check-tax-workbench.py]
+      changed_when: false
+    - name: Exercise bookkeeping, credit and diagnostic behavior using isolated SQLite fixtures
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, -m, unittest, tests.test_tax_bookkeeping, -q]
+        chdir: /opt/dobhrap/current
+      environment:
+        DOBHRAP_DB_BACKEND: sqlite
+      changed_when: false
+    - name: Verify published user and super admin controls
+      ansible.builtin.uri:
+        url: 'https://olamideolatayobello.com/{{ item.path }}'
+        return_content: true
+        status_code: 200
+      loop:
+        - {path: tax-analyst.js, marker: books-save}
+        - {path: tax-analyst.js, marker: quote-upload}
+        - {path: tax-analyst.js, marker: acknowledge-diagnostic}
+        - {path: tax-management.js, marker: workbench-settings}
+        - {path: tax-preparation.js, marker: taxDiagnosticTarget}
+      register: workbench_gui
+      failed_when: item.marker not in workbench_gui.content
+      changed_when: false
+    - name: Report verified capabilities and boundaries
+      ansible.builtin.debug:
+        msg:
+          - 'Tax Analyst > Bookkeeping: line items, rules, supplier statement entries, matching, expense approval, mileage, commerce, contacts, notes and reviewed CSV exports.'
+          - 'Tax Analyst > Return diagnostics: source-linked saved-data checks, warning acknowledgments and explicit filing blockers.'
+          - 'Super admin > Tax analyst management: base credit price, processing multipliers, module gates, formats, limits and per-workspace pauses.'
+          - 'Existing paid sessions remain one credit each. New bank PDF page quotes are server counted. No automatic payment-method charges or external payments occur.'
+          - 'No paid AI extraction was invoked by this verification. Connected bank feeds, accounting publishing, email/WhatsApp capture and IRS/state transmission/acknowledgments require separate integrations.'

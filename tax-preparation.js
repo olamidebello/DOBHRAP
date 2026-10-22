@@ -1,5 +1,5 @@
 // Tax data is kept in authenticated memory and encrypted server storage, never browser storage.
-let taxViewToken=0,taxCleanup=null,taxSelectedYear=null;
+let taxViewToken=0,taxCleanup=null,taxSelectedYear=null,taxDiagnosticTarget=null;
 async function showTaxPreparation(page){
  if(taxCleanup)await taxCleanup();
  const token=++taxViewToken;
@@ -20,7 +20,7 @@ async function showTaxPreparation(page){
  async function interview(initial){
   taxSelectedYear=initial.year;
   let draft=initial,index=draft.step,timer=null,chain=Promise.resolve(),busy=false,alive=true,pendingSaves=0,uploadBusy=false,documentQueue=null;
-  const steps=schema.steps;
+  const steps=schema.steps;const diagnosticTarget=taxDiagnosticTarget?.id===initial.id?taxDiagnosticTarget:null;if(diagnosticTarget){const targetIndex=steps.findIndex(s=>s.key===diagnosticTarget.step);if(targetIndex>=0)index=targetIndex;taxDiagnosticTarget=null}
   taxCleanup=()=>{alive=false;clearTimeout(timer)};
   const money=v=>formatMoneyMinor(v,'USD');
   content.innerHTML='<div id="tax-workspace"><section><h2>'+draft.year+' Tax Return</h2><p class="notice">Private preparation worksheet — NOT FOR FILING. No completed 1040, refund guarantee, state calculation or tax transmission.</p><div class="tax-progress"><progress id="tax-progress" max="16" value="0"></progress><span id="tax-step-count"></span></div><p id="tax-save-state" role="status">Saved</p><div id="tax-step-links" class="tax-step-links"></div></section><section id="tax-slide" class="tax-slide" aria-live="polite"></section><div class="tax-actions"><button id="tax-back">Back</button><button id="tax-save">Save draft</button><button id="tax-next">Save & continue</button><button id="tax-exit">Save & exit</button></div></div>';
@@ -140,6 +140,7 @@ async function showTaxPreparation(page){
   taxCleanup=async()=>{if(uploadBusy||documentQueue?.has())throw Error('Upload or remove queued documents before leaving');if(alive&&timer&&workspace.isConnected)await save();await chain.catch(()=>{});alive=false;clearTimeout(timer);window.removeEventListener('beforeunload',warn)};
   render();
  }
+ if(taxDiagnosticTarget?.id){const target={...taxDiagnosticTarget};await interview(await api('tax-prep/open',{id:target.id}));const el=Array.from(content.querySelectorAll('[name]')).find(e=>e.name===target.field)||content.querySelector('#tax-slide h2,#tax-slide h3');if(el){el.style.outline='2px solid #b91c1c';el.tabIndex=el.tabIndex<0?-1:el.tabIndex;el.focus();el.scrollIntoView?.({block:'center'})}return}
  list();
 }
 function parseTaxCsv(raw){
@@ -164,8 +165,10 @@ function taxDocumentQueue(input,container,types,defaults){
   container.querySelectorAll('[data-upload-row]').forEach(row=>{const i=Number(row.dataset.uploadRow);row.querySelector('[data-upload-type]').onchange=e=>items[i].type=e.target.value;row.querySelector('[data-upload-custom]').oninput=e=>items[i].custom=e.target.value;row.querySelector('[data-upload-remove]').onclick=()=>{items.splice(i,1);render()}});
   container.querySelectorAll('input,select,button').forEach(el=>el.disabled=locked);
  }
- input.onchange=()=>{if(locked)return;const d=defaults();for(const file of input.files)items.push({file,type:types.includes(d.type)?d.type:types[0],custom:d.custom||'',uploaded:false});input.value='';render()};
- return {pending:()=>items.filter(r=>!r.uploaded).map(r=>({...r,source:r,document_type:r.custom.trim()||r.type})),has:()=>items.length>0,lock:value=>{locked=value;input.disabled=value;render()},mark:(entry,status,uploaded=false)=>{entry.source.status=status;entry.source.uploaded=uploaded;render()},finish:()=>{items=items.filter(r=>!r.uploaded);locked=false;input.disabled=false;render()}};
+ function addFiles(files){if(locked)return;const d=defaults();for(const file of files){if(items.length>=100){message('Queue limit is 100 files');break}if(!items.some(r=>r.file.name===file.name&&r.file.size===file.size&&r.file.lastModified===file.lastModified))items.push({file,type:types.includes(d.type)?d.type:types[0],custom:d.custom||'',uploaded:false})}render()}
+ input.onchange=()=>{addFiles(input.files);input.value=''};
+ const drop=document.createElement('div');drop.textContent='Drop documents here, or choose files above.';drop.setAttribute('role','group');drop.setAttribute('aria-label','Document drop area');drop.tabIndex=0;drop.style.cssText='border:2px dashed #678;padding:16px;margin:12px 0;border-radius:8px';container.before(drop);drop.ondragover=e=>{e.preventDefault();if(!locked)drop.style.background='#edf7f0'};drop.ondragleave=()=>drop.style.background='';drop.ondrop=e=>{e.preventDefault();drop.style.background='';if(!locked)addFiles(e.dataTransfer.files)};drop.onclick=()=>{if(!locked)input.click()};drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();if(!locked)input.click()}};
+ return {addFiles,pending:()=>items.filter(r=>!r.uploaded).map(r=>({...r,source:r,document_type:r.custom.trim()||r.type})),has:()=>items.length>0,lock:value=>{locked=value;input.disabled=value;render()},mark:(entry,status,uploaded=false)=>{entry.source.status=status;entry.source.uploaded=uploaded;render()},finish:()=>{items=items.filter(r=>!r.uploaded);locked=false;input.disabled=false;render()}};
 }
 
 const taxClientBasicRecords=['Taxpayer identification and SSN / ITIN evidence','Spouse and dependent information','W-2 wage statements','1099 income statements and investment records','Business and rental income / expenses','Deductions and charitable contribution records','Education and childcare records','Health insurance / 1095-A','Estimated tax payments','Prior-year tax return'];

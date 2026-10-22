@@ -242,7 +242,7 @@ def review(data,completed,tax_year=2026):
   if step['key'] not in completed:issues.append({'step':step['key'],'message':'Review and continue this section','blocking':True})
   for row in section if isinstance(section,list) else [section]:
    for f in step['fields']:
-    if f['required'] and not row.get(f['key']):issues.append({'step':step['key'],'message':'Missing '+f['label'],'blocking':True})
+    if f['required'] and not row.get(f['key']):issues.append({'step':step['key'],'field':f['key'],'message':'Missing '+f['label'],'blocking':True})
  if tax_year not in tax_rules.RULES:unsupported.append('Year-specific tax computation is unavailable for '+str(tax_year)+'; preparation intake only')
  start=data.get('start',{});person=data.get('personal',{});house=data.get('household',{})
  if not person.get('tax_id'):issues.append({'step':'personal','message':'Taxpayer identification is missing','blocking':True})

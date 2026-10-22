@@ -30,8 +30,9 @@ class TaxManagementTests(unittest.TestCase):
   grant(count=1);one=self.upload(1);two=self.upload(2)
   with patch.object(analyst,'extract',return_value={'records':[],'tax_fields':[]}) as extract:
    self.assertEqual(self.analyst('analyze',{'id':one['id'],'revision':one['revision'],'consent':True})['state'],'review')
-   failed=self.analyst('analyze',{'id':two['id'],'revision':two['revision'],'consent':True})
-   self.assertEqual(failed['state'],'failed');self.assertIn('Purchase',failed['notice']);self.assertEqual(extract.call_count,1)
+   with self.assertRaises(a.ServiceError) as error:self.analyst('analyze',{'id':two['id'],'revision':two['revision'],'consent':True})
+   self.assertEqual(error.exception.status,402);self.assertEqual(extract.call_count,1)
+   with app.connect() as c:self.assertEqual(c.execute('SELECT state FROM tax_analyst_documents WHERE id=?',(two['id'],)).fetchone()[0],'uploaded')
   self.assertEqual(self.balance()['available'],0);self.assertEqual(self.balance()['used'],1)
  def test_failure_returns_credit_and_retry_requires_consent(self):
   grant(count=1);doc=self.upload()
