@@ -109,5 +109,5 @@ class BookkeepingTests(unittest.TestCase):
   body={'year':2026,'type':'application/pdf','base64':base64.b64encode(b'%PDF-pricing fixture').decode(),'processing_mode':'lines'}
   q=self.call('quote-upload',body);doc=self.call('upload',{**body,'quote_revision':q['rate_revision'],'quote_credits':q['credits']})
   root={'id':1,'role':'super_admin'}
-  with app.connect() as c:billing.pricing(c,'POST',{'price_cents':500,'active':True,'expected_price_cents':500,'expected_active':True,'credit_rates':{'totals':1,'lines':4,'supplier':2,'bank_per_page':3},'expected_rates_revision':q['rate_revision']},root)
+  with app.connect() as c:billing.pricing(c,'POST',{'price_cents':500,'active':True,'expected_price_cents':100,'expected_active':True,'credit_rates':{'totals':1,'lines':4,'supplier':2,'bank_per_page':3},'expected_rates_revision':q['rate_revision']},root)
   self.assertEqual(self.call('quote-upload',body)['credits'],4);self.assertEqual(next(d for d in self.call('list')['documents'] if d['id']==doc['id'])['processing']['credits'],2)

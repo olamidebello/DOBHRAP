@@ -21,7 +21,7 @@ class TaxManagementTests(unittest.TestCase):
  def balance(self,user=None):
   with app.connect() as c:return billing.status(c,1,user or self.user)
  def test_default_price_and_verified_owner_specific_purchase(self):
-  self.assertEqual(self.balance()['price_cents'],500)
+  self.assertEqual(self.balance()['price_cents'],100)
   with self.assertRaises(a.ServiceError) as error:self.upload()
   self.assertEqual(error.exception.status,402)
   grant(environment='test');grant(state='pending');self.assertEqual(self.balance()['available'],0)
@@ -49,13 +49,24 @@ class TaxManagementTests(unittest.TestCase):
     except a.ServiceError:return False
   with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(attempt,range(2)))
   self.assertEqual(sum(results),1);self.assertEqual(self.balance()['reserved'],1)
+ def test_recommended_profile_preserves_orders_and_availability(self):
+  import importlib.util
+  from pathlib import Path
+  spec=importlib.util.spec_from_file_location('pricing_setup',Path(__file__).resolve().parents[1]/'ansible/configure-tax-pricing.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+  order=grant(count=1)[0];self.balance()
+  self.admin('pricing',{'price_cents':750,'active':False,'expected_price_cents':100,'expected_active':True})
+  with app.connect() as c:result=module.apply(c,self.root)
+  self.assertEqual(result['price_cents'],100);self.assertEqual(result['rates'],billing.RECOMMENDED['rates']);self.assertEqual(result['usage']['available'],1)
+  with app.connect() as c:
+   self.assertEqual(c.execute('SELECT amount FROM market_orders WHERE id=?',(order,)).fetchone()[0],500)
+   product=c.execute('SELECT * FROM market_products WHERE id=?',(billing.PRODUCT,)).fetchone();self.assertFalse(product['active']);self.assertEqual(product['name'],billing.RECOMMENDED['name'])
  def test_price_authorization_order_snapshot_and_unused_suspend(self):
   order=grant(count=1)[0];self.balance()
   with self.assertRaises(a.ServiceError):self.admin('pricing',user=self.user)
-  self.admin('pricing',{'price_cents':750,'active':True,'expected_price_cents':500,'expected_active':True})
+  self.admin('pricing',{'price_cents':750,'active':True,'expected_price_cents':100,'expected_active':True})
   self.assertEqual(self.balance()['price_cents'],750)
   with app.connect() as c:self.assertEqual(c.execute('SELECT amount FROM market_orders WHERE id=?',(order,)).fetchone()[0],500)
-  with self.assertRaises(a.ServiceError):self.admin('pricing',{'price_cents':800,'active':True,'expected_price_cents':500,'expected_active':True})
+  with self.assertRaises(a.ServiceError):self.admin('pricing',{'price_cents':800,'active':True,'expected_price_cents':100,'expected_active':True})
   self.admin('session-action',{'order_id':order,'expected_state':'available'});self.assertEqual(self.balance()['available'],0)
   self.admin('session-action',{'order_id':order,'expected_state':'revoked'});self.assertEqual(self.balance()['available'],1)
   with self.assertRaises(a.ServiceError):self.admin('session-action',{'order_id':order,'expected_state':'used'})
@@ -111,7 +122,7 @@ class TaxManagementHttpTests(unittest.TestCase):
   settings=self.request('/api/platform/tax-analyst/settings',client=root)
   with self.assertRaises(HTTPError) as error:self.request('/api/platform/tax-analyst/settings',{'revision':settings['revision'],'policy':settings['policy']},root)
   self.assertEqual(error.exception.code,403)
-  status=self.request('/api/tax-analyst/billing',client=client);self.assertEqual(status['price_cents'],500);self.assertEqual(status['available'],0)
+  status=self.request('/api/tax-analyst/billing',client=client);self.assertEqual(status['price_cents'],100);self.assertEqual(status['available'],0)
   doc={'year':2025,'type':'application/pdf','base64':base64.b64encode(b'%PDF-synthetic').decode()}
   with self.assertRaises(HTTPError) as error:self.request('/api/tax-analyst/upload',doc,client,csrf)
   self.assertEqual(error.exception.code,402)

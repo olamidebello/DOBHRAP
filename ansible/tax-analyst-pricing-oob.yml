@@ -1,0 +1,17 @@
+---
+- name: Apply recommended Tax Analyst product and usage pricing
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require local execution on the hosting server
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Apply authorized pricing to active catalog without AI calls or payment charges
+      ansible.builtin.script:
+        cmd: configure-tax-pricing.py
+        executable: /opt/dobhrap/current/venv/bin/python
+      register: recommended_pricing
+    - name: Report product and usage pricing
+      ansible.builtin.debug:
+        var: recommended_pricing.stdout

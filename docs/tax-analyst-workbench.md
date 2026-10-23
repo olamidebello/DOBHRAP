@@ -91,3 +91,20 @@ Transfer that directory to `/opt/dobhrap-wheels` on hosting, then add these argu
 ```
 
 Offline installation fails if any pinned requirement or transitive dependency is missing. It never silently falls back to the network. A staged dependency-install failure occurs before the active-release switch; rerun the playbook after restoring connectivity or supplying wheels.
+
+## Recommended launch billing (October 2026)
+
+The recommended retail price is **$1 per prepaid analysis credit**. Totals consume 1 credit ($1/document), line items 2 ($2/document), supplier statements 2 ($2/document), and bank PDFs 3 per verified page ($3/page). A ten-page bank statement therefore quotes 30 credits ($30). This is a proposed launch price, not an audited cost-plus margin; provider charges vary by model, input size and output usage. Storage/manual review are free within configured limits. Failed analysis returns the reserved credits. New attempts require consent and a new credit reservation. There are no recurring subscriptions or automatic card debits.
+
+New installations receive the $1 default. Existing catalogs retain their configured price until explicitly changed. Super admin > Tax analyst management now includes editable product name/description, aggregate credit usage, and **Use recommended product & rates** (fills the form; Save applies it). Prices of old orders, existing credits, and uploaded document rate snapshots remain unchanged. Purchase availability remains as configured. No credit packs or bulk discounts are represented as implemented.
+
+To apply the profile on the installed server after deploying the latest source:
+
+```bash
+cd /opt/dobhrap-watchdog-source
+git pull --ff-only origin main
+ansible-playbook -i 'dobhrap,' -c local ansible/repair-oob.yml
+ansible-playbook -i 'dobhrap,' -c local ansible/tax-analyst-pricing-oob.yml
+```
+
+The pricing playbook requires a super administrator, uses the active database backend, and does not depend on an OpenAI key/model or invoke paid requests. It updates only the Tax Analyst product and processing rates; existing orders and balances remain intact. API token pricing is not the customer retail price, and API token usage is not measured by this credit-state summary.

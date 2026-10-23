@@ -11,6 +11,8 @@ class WalletTests(unittest.TestCase):
   self.temp=tempfile.TemporaryDirectory();self.old=app.DB;app.DB=self.temp.name+'/db'
   self.env=patch.dict(os.environ,{'DOBHRAP_DB_BACKEND':'sqlite','DOBHRAP_ADMIN_PASSWORD':'synthetic-password-123','DOBHRAP_ENCRYPTION_KEY':Fernet.generate_key().decode(),'DOBHRAP_ENABLE_MARKETPLACE':'1'});self.env.start();app.init();self.root={'id':1,'role':'super_admin'};self.user={'id':2,'role':'editor'}
   with app.connect() as c:c.execute("INSERT INTO users(id,email,salt,hash,role,tenant_id) VALUES(2,'synthetic@example.com','x','x','editor',1)")
+  # Exercise wallet splits, concurrency and cash-out allocation at a fixed legacy $5 product price.
+  with app.connect() as c:c.execute("UPDATE market_products SET amount=500 WHERE id='tax-analyst-session'")
  def tearDown(self):self.env.stop();app.DB=self.old;self.temp.cleanup()
  def credit(self,amount='10.00',code='USD',key=None,user=None):
   with app.connect() as c:return wallet.credit(c,{'owner':2,'currency':code,'amount':amount,'reason':'Synthetic account credit','request_key':key or str(uuid.uuid4())},user or self.root)

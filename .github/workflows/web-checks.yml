@@ -63,6 +63,7 @@ jobs:
       - name: Check expanded Tax Analyst deployment and bookkeeping GUI
         run: |
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-analyst-workbench-oob.yml
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-analyst-pricing-oob.yml
           node tests/tax-bookkeeping-ui.cjs
       - name: Start synthetic test server
         run: |

@@ -1,4 +1,4 @@
-"""One verified live or wallet purchase buys one successful document-analysis session."""
+"""Verified live or wallet purchases fund prepaid analysis credits."""
 import time, json
 from contextlib import contextmanager
 import advanced as a
@@ -6,12 +6,13 @@ import wallet
 
 CODE='tax_analyst_session'
 PRODUCT='tax-analyst-session'
+RECOMMENDED={'price_cents':100,'rates':{'totals':1,'lines':2,'supplier':2,'bank_per_page':3},'name':'Tax Analyst — one analysis credit','description':'One prepaid analysis credit. Totals use 1 credit; line items and supplier statements use 2; bank statements use 3 per verified PDF page. Uploads and manual review are free within limits. Failed analysis returns reserved credits. No subscription or automatic card charge.'}
 
 def initialize(c):
  c.execute('CREATE TABLE IF NOT EXISTS tax_analyst_credit_policy(id INTEGER PRIMARY KEY,revision INTEGER NOT NULL,payload TEXT NOT NULL)')
  c.execute('INSERT OR IGNORE INTO tax_analyst_credit_policy VALUES(1,1,?)',(json.dumps({'totals':1,'lines':2,'supplier':2,'bank_per_page':3}),))
  c.execute('CREATE TABLE IF NOT EXISTS tax_analyst_sessions(order_id TEXT PRIMARY KEY,tenant_id INTEGER NOT NULL,owner INTEGER NOT NULL,state TEXT NOT NULL,document_id TEXT,attempt_revision INTEGER,created INTEGER NOT NULL,updated INTEGER NOT NULL)')
- c.execute('INSERT OR IGNORE INTO market_products VALUES(?,?,?,?,?,?,?)',(PRODUCT,'Tax Analyst — one analysis credit','One prepaid analysis credit. Processing quotes specify 1 credit for totals, 2 for line items or supplier statements, and 3 per bank PDF page by default. Failed analysis releases reserved credits.','tax_analyst_session',500,'USD',1))
+ c.execute('INSERT OR IGNORE INTO market_products VALUES(?,?,?,?,?,?,?)',(PRODUCT,'Tax Analyst — one analysis credit','One prepaid analysis credit. Processing quotes specify 1 credit for totals, 2 for line items or supplier statements, and 3 per bank PDF page by default. Failed analysis releases reserved credits.','tax_analyst_session',RECOMMENDED['price_cents'],'USD',1))
 
  c.execute("UPDATE market_products SET name='Tax Analyst — one analysis credit',description='One prepaid analysis credit; server quotes specify the credits required per processing mode. Failed analysis returns reserved credits.' WHERE id=? AND name='Tax Analyst — one document session'",(PRODUCT,))
 
@@ -25,7 +26,7 @@ def eligible_sql():return " FROM tax_analyst_sessions x JOIN market_orders o ON 
 def status(c,tid,user):
  sync(c,tid,user['id']);counts={r['state']:r['n'] for r in c.execute('SELECT x.state,count(*) n'+eligible_sql()+' GROUP BY x.state',(tid,user['id']))}
  product=c.execute('SELECT * FROM market_products WHERE id=?',(PRODUCT,)).fetchone()
- return {'price_cents':product['amount'] if product else 500,'currency':'USD','product_id':PRODUCT,'purchase_available':bool(product and product['active']),'available':counts.get('available',0),'reserved':counts.get('reserved',0),'used':counts.get('used',0),'admin_exempt':user['role']=='super_admin','session_definition':'One existing paid session is one analysis credit. Totals: 1 credit; line items: 2; supplier statement: 2; bank statement: 3 per verified PDF page by default. Failed analysis returns all reserved credits. Legacy uploads retain their original one-credit cost.','credit_policy':credit_policy(c),'payment_required':user['role']!='super_admin'}
+ return {'price_cents':product['amount'] if product else RECOMMENDED['price_cents'],'currency':'USD','product_id':PRODUCT,'purchase_available':bool(product and product['active']),'available':counts.get('available',0),'reserved':counts.get('reserved',0),'used':counts.get('used',0),'admin_exempt':user['role']=='super_admin','session_definition':'One existing paid session is one analysis credit. Totals: 1 credit; line items: 2; supplier statement: 2; bank statement: 3 per verified PDF page by default. Failed analysis returns all reserved credits. Legacy uploads retain their original one-credit cost.','credit_policy':credit_policy(c),'payment_required':user['role']!='super_admin'}
 
 def tid_for(user):return int(user.get('tenant_id',1)) if isinstance(user,dict) else int(user['tenant_id'])
 
@@ -71,15 +72,20 @@ def pricing(c,method,body,user):
  if method=='POST':
   price=body.get('price_cents');active=body.get('active')
   if type(price) is not int or not 50<=price<=1000000 or type(active) is not bool:raise a.ServiceError('Choose a USD price from $0.50 to $10,000 and purchase availability')
+  name=body.get('name');description=body.get('description')
+  if name is not None and (not isinstance(name,str) or not 1<=len(name.strip())<=120):raise a.ServiceError('Product name must contain 1 to 120 characters')
+  if description is not None and (not isinstance(description,str) or len(description)>2000):raise a.ServiceError('Product description must be at most 2000 characters')
   # Do not mutate outstanding orders or previously purchased sessions.
   if c.execute('UPDATE market_products SET amount=?,active=? WHERE id=? AND amount=? AND active=?',(price,int(active),PRODUCT,body.get('expected_price_cents'),int(body.get('expected_active',False)))).rowcount!=1:raise a.ServiceError('Price changed; reload pricing',409)
   if 'credit_rates' in body:
    rates=body['credit_rates']
    if not isinstance(rates,dict) or set(rates)!={'totals','lines','supplier','bank_per_page'} or any(type(v) is not int or not 1<=v<=10 for v in rates.values()):raise a.ServiceError('Each processing credit rate must be an integer from 1 to 10')
    if c.execute('UPDATE tax_analyst_credit_policy SET payload=?,revision=revision+1 WHERE id=1 AND revision=?',(json.dumps(rates),body.get('expected_rates_revision'))).rowcount!=1:raise a.ServiceError('Credit rates changed; reload pricing',409)
-  a.audit(c,user['id'],'Tax analyst credit price/availability updated')
+  if name is not None:c.execute('UPDATE market_products SET name=? WHERE id=?',(name.strip(),PRODUCT))
+  if description is not None:c.execute('UPDATE market_products SET description=? WHERE id=?',(description,PRODUCT))
+  a.audit(c,user['id'],'Tax analyst credit price/product/availability updated')
  for pair in c.execute("SELECT DISTINCT tenant_id,owner FROM market_orders WHERE service_code='tax_analyst_session' AND environment IN ('live','wallet') AND state='fulfilled' LIMIT 500").fetchall():sync(c,pair['tenant_id'],pair['owner'])
- return {'credit_policy':credit_policy(c),'product':dict(c.execute('SELECT * FROM market_products WHERE id=?',(PRODUCT,)).fetchone()),'sessions':[dict(r) for r in c.execute('SELECT order_id,tenant_id,owner,state,document_id,created,updated FROM tax_analyst_sessions ORDER BY updated DESC LIMIT 200')],'notice':'One verified legacy session provides one prepaid analysis credit. Processing uses the quote saved on each document; failed analysis releases all reserved credits. Base USD price and mode multipliers are configurable. Test payments and coupons do not grant credits. Super administrators remain exempt for platform operations.'}
+ return {'recommendation':RECOMMENDED,'usage_summary':{r['state']:r['n'] for r in c.execute('SELECT state,count(*) n FROM tax_analyst_sessions GROUP BY state')},'credit_policy':credit_policy(c),'product':dict(c.execute('SELECT * FROM market_products WHERE id=?',(PRODUCT,)).fetchone()),'sessions':[dict(r) for r in c.execute('SELECT order_id,tenant_id,owner,state,document_id,created,updated FROM tax_analyst_sessions ORDER BY updated DESC LIMIT 200')],'notice':'One verified legacy session provides one prepaid analysis credit. Processing uses the quote saved on each document; failed analysis releases all reserved credits. Base USD price and mode multipliers are configurable. Test payments and coupons do not grant credits. Super administrators remain exempt for platform operations.'}
 
 def session_action(c,body,user):
  if user['role']!='super_admin':raise a.ServiceError('Super administrator required',403)
