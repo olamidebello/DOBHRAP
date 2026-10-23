@@ -7,6 +7,7 @@ import advanced
 import database
 import password_reset
 import marketplace
+import ai_services
 import provider_settings
 import support
 import international
@@ -116,6 +117,7 @@ def init():
   initialize_business(c)
   marketplace.initialize(c)
   wallet.initialize(c)
+  ai_services.initialize(c)
   cashout.initialize(c)
   coupons.initialize(c)
   tax_analyst_billing.initialize(c)
@@ -206,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -320,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
     cashout_result=cashout.dispatch(path,self.command,body,c,u)
     if cashout_result is not None:c.commit();self.reply(200,cashout_result);return
+    ai_result=ai_services.dispatch(path,self.command,body,c,u,tenant_id)
+    if ai_result is not None:c.commit();self.reply(200,ai_result);return
     if path=='/api/wallet/status' and self.command=='GET':self.reply(200,wallet.status(c,u));return
     if path=='/api/tax-analyst/billing' and self.command=='GET':
      result=tax_analyst_billing.status(c,tenant_id,u);c.commit();self.reply(200,result);return

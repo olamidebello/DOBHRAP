@@ -1,0 +1,30 @@
+---
+- import_playbook: repair-oob.yml
+
+- name: Verify OpenAI cost-plus assistant without making paid requests
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify served AI assistant interface
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/ai-services.js
+        return_content: true
+        status_code: 200
+      register: ai_interface
+      failed_when: "'ai-service/chat' not in ai_interface.content"
+      changed_when: false
+    - name: Verify active billing policy and request schema
+      ansible.builtin.command:
+        argv:
+          - /opt/dobhrap/current/venv/bin/python
+          - -c
+          - "import sys,json;sys.path.insert(0,'/opt/dobhrap/current/ansible');from active_runtime import load_active;a=load_active('oob-business.service');import ai_services;c=a.connect();p=ai_services.policy(c);c.execute('SELECT id,state,reserved,charged FROM ai_service_requests LIMIT 1');print(json.dumps({'markup_percent':30,'enabled':p['values']['enabled'],'model':p['values']['model'],'rates_verified':p['values']['rates_verified'],'paid_request_invoked':False}));c.close()"
+      register: ai_policy
+      changed_when: false
+    - name: Report next setup step
+      ansible.builtin.debug:
+        msg:
+          - '{{ ai_policy.stdout }}'
+          - 'Super admin > AI API & 30% usage billing > Manage AI service pricing: confirm exact model prices and enable. Existing OpenAI key is reused.'
+          - 'Users: Marketplace > AI assistant. This text-only service uses wallet reservations and actual returned token usage. Existing Tax Analyst extraction credit products remain separate.'

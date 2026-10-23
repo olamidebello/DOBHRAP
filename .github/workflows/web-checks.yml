@@ -65,6 +65,8 @@ jobs:
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-analyst-workbench-oob.yml
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/tax-analyst-pricing-oob.yml
           node tests/tax-bookkeeping-ui.cjs
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/ai-service-oob.yml
+          node tests/ai-service-ui.cjs
       - name: Start synthetic test server
         run: |
           python tests/browser_fixture.py > /tmp/oob-browser-server.log 2>&1 &
