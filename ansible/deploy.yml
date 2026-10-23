@@ -111,6 +111,11 @@
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
         virtualenv: "{{ app_root }}/releases/{{ release_id }}/venv"
         virtualenv_command: python3 -m venv
+        extra_args: '--timeout {{ dobhrap_pip_timeout | default(120) | int }} --retries {{ dobhrap_pip_retries | default(5) | int }} --prefer-binary'
+      environment:
+        PIP_CACHE_DIR: /var/cache/dobhrap/pip
+        PIP_FIND_LINKS: '{{ dobhrap_pip_find_links | default("") }}'
+        PIP_NO_INDEX: '{{ (dobhrap_pip_offline | default(false) | bool) | ternary("1", "0") }}'
     - name: Run release tests before activation
       ansible.builtin.command:
         argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", -m, unittest, discover, -s, tests, -v]

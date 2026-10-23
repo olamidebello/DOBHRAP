@@ -73,3 +73,21 @@ All switches are enforced in the backend. Disabling a feature does not destroy u
 Bookkeeping records, exports, review notes and diagnostic acknowledgments are encrypted using the existing persistent application key. Public feature/pricing policies contain no taxpayer data. Owner checks, tenant separation, CSRF handling, optimistic revisions, enum/date/amount validation, import limits and metadata audit entries apply. Expense reviewers receive receipt access only after the owner explicitly assigns and submits a claim to that administrator in the same workspace.
 
 Feature inspiration for transaction rules and reconciliation: [Intuit bank rules](https://quickbooks.intuit.com/learn-support/en-us/help-article/banking/set-bank-rules-categorize-online-banking-online/L0mjJl0nD_US_en_US) and [Intuit reconciliation](https://quickbooks.intuit.com/learn-support/en-us/help-article/statement-reconciliation/reconcile-account-quickbooks-online/L3XzsllsK_US_en_US). The Dext, AutoEntry and diagnostic inventories were supplied in the request. No vendor affiliation or complete feature parity is claimed.
+
+## Slow PyPI connections and offline installation
+
+The password-recovery, normal deployment and MySQL staging installers use a 120-second pip socket timeout, five connection retries, preferred wheels, and a shared pip cache at `/var/cache/dobhrap/pip`. Pins and HTTPS verification remain enforced. Override with `-e dobhrap_pip_timeout=180 -e dobhrap_pip_retries=8` if necessary. A timeout followed by “from versions: none” does not establish that the pinned package is unavailable; inspect the preceding network error.
+
+If the hosting server cannot reach PyPI at all, prepare a complete wheel directory on a connected machine matching the server's Python version, OS and architecture:
+
+```bash
+python3 -m pip download --only-binary=:all: -r requirements.txt -d wheels
+```
+
+Transfer that directory to `/opt/dobhrap-wheels` on hosting, then add these arguments to the deployment command:
+
+```bash
+-e dobhrap_pip_offline=true -e dobhrap_pip_find_links=/opt/dobhrap-wheels
+```
+
+Offline installation fails if any pinned requirement or transitive dependency is missing. It never silently falls back to the network. A staged dependency-install failure occurs before the active-release switch; rerun the playbook after restoring connectivity or supplying wheels.
