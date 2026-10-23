@@ -49,6 +49,13 @@
       loop: "{{ deployment_checks }}"
       loop_control:
         label: "{{ item.name }}"
+    - name: Identify complete committed source tree for release identity
+      ansible.builtin.command:
+        argv: [git, -C, '{{ app_source }}', rev-parse, 'HEAD^{tree}']
+      delegate_to: localhost
+      become: false
+      register: release_source_tree
+      changed_when: false
     - name: Hash branding asset on controller
       ansible.builtin.stat:
         path: "{{ app_source }}/assets/oob-logo.png"
@@ -58,7 +65,7 @@
       register: branding_asset
     - name: Derive immutable source release ID
       ansible.builtin.set_fact:
-        release_id: "{{ (branding_asset.stat.checksum + lookup('file', app_source + '/attendance.py') + lookup('file', app_source + '/attendance.js') + lookup('file', app_source + '/tests/test_attendance.py') + lookup('file', app_source + '/password_reset.py') + lookup('file', app_source + '/password-reset.js') + lookup('file', app_source + '/database.py') + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/tax_preparation.py') + lookup('file', app_source + '/tax_rules.py') + lookup('file', app_source + '/tax_filing.py') + lookup('file', app_source + '/tax_analyst_control.py') + lookup('file', app_source + '/tax_analyst_billing.py') + lookup('file', app_source + '/tax_analysis_report.py') + lookup('file', app_source + '/tax_automation_worker.py') + lookup('file', app_source + '/tax-management.js') + lookup('file', app_source + '/wallet.py') + lookup('file', app_source + '/wallet.js') + lookup('file', app_source + '/cashout.py') + lookup('file', app_source + '/cashout.js') + lookup('file', app_source + '/tax_analyst.py') + lookup('file', app_source + '/tax_services.py') + lookup('file', app_source + '/coupons.py') + lookup('file', app_source + '/tests/test_coupons.py') + lookup('file', app_source + '/tests/test_tax_services.py') + lookup('file', app_source + '/tax-analyst.js') + lookup('file', app_source + '/tests/test_tax_bookkeeping.py') + lookup('file', app_source + '/tests/test_tax_analyst.py') + lookup('file', app_source + '/tax-preparation.js') + lookup('file', app_source + '/tests/test_tax_preparation.py') + lookup('file', app_source + '/international.py') + lookup('file', app_source + '/international.js') + lookup('file', app_source + '/tests/test_international.py') + lookup('file', app_source + '/provider_settings.py') + lookup('file', app_source + '/support.py') + lookup('file', app_source + '/support-ui.js') + lookup('file', app_source + '/tests/test_support.py') + lookup('file', app_source + '/marketplace.py') + lookup('file', app_source + '/tests/test_marketplace.py') + lookup('file', app_source + '/bank_import.py') + lookup('file', app_source + '/tests/test_bank_import.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
+        release_id: "{{ (release_source_tree.stdout + branding_asset.stat.checksum + lookup('file', app_source + '/attendance.py') + lookup('file', app_source + '/attendance.js') + lookup('file', app_source + '/tests/test_attendance.py') + lookup('file', app_source + '/password_reset.py') + lookup('file', app_source + '/password-reset.js') + lookup('file', app_source + '/database.py') + lookup('file', app_source + '/app.py') + lookup('file', app_source + '/advanced.py') + lookup('file', app_source + '/tax_preparation.py') + lookup('file', app_source + '/tax_rules.py') + lookup('file', app_source + '/tax_filing.py') + lookup('file', app_source + '/tax_analyst_control.py') + lookup('file', app_source + '/tax_analyst_billing.py') + lookup('file', app_source + '/tax_analysis_report.py') + lookup('file', app_source + '/tax_automation_worker.py') + lookup('file', app_source + '/tax-management.js') + lookup('file', app_source + '/wallet.py') + lookup('file', app_source + '/wallet.js') + lookup('file', app_source + '/cashout.py') + lookup('file', app_source + '/cashout.js') + lookup('file', app_source + '/tax_analyst.py') + lookup('file', app_source + '/tax_services.py') + lookup('file', app_source + '/coupons.py') + lookup('file', app_source + '/tests/test_coupons.py') + lookup('file', app_source + '/tests/test_tax_services.py') + lookup('file', app_source + '/tax-analyst.js') + lookup('file', app_source + '/tests/test_tax_bookkeeping.py') + lookup('file', app_source + '/tests/test_tax_analyst.py') + lookup('file', app_source + '/tax-preparation.js') + lookup('file', app_source + '/tests/test_tax_preparation.py') + lookup('file', app_source + '/international.py') + lookup('file', app_source + '/international.js') + lookup('file', app_source + '/tests/test_international.py') + lookup('file', app_source + '/provider_settings.py') + lookup('file', app_source + '/support.py') + lookup('file', app_source + '/support-ui.js') + lookup('file', app_source + '/tests/test_support.py') + lookup('file', app_source + '/marketplace.py') + lookup('file', app_source + '/tests/test_marketplace.py') + lookup('file', app_source + '/bank_import.py') + lookup('file', app_source + '/tests/test_bank_import.py') + lookup('file', app_source + '/worker.py') + lookup('file', app_source + '/backup.py') + lookup('file', app_source + '/index.html') + lookup('file', app_source + '/advanced.js') + lookup('file', app_source + '/workspace.js') + lookup('file', app_source + '/manifest.webmanifest') + lookup('file', app_source + '/service-worker.js') + lookup('file', app_source + '/assets/app-icon.svg') + lookup('file', app_source + '/requirements.txt') + lookup('file', app_source + '/tests/test_app.py') + lookup('file', app_source + '/tests/test_advanced.py') + lookup('file', app_source + '/tests/test_setup.py') + lookup('file', app_source + '/tests/test_tenants.py')) | hash('sha256') }}"
   tasks:
     - name: Install prerequisites
       ansible.builtin.apt:
@@ -98,14 +105,35 @@
         - {path: "{{ app_root }}/releases/{{ release_id }}/tests", owner: root, mode: '0750'}
         - {path: /var/lib/dobhrap, owner: "{{ service_user }}", mode: '0700'}
         - {path: /var/backups/dobhrap, owner: "{{ service_user }}", mode: '0700'}
-    - name: Copy versioned source
-      ansible.builtin.copy:
-        src: "{{ app_source }}/{{ item }}"
-        dest: "{{ app_root }}/releases/{{ release_id }}/{{ item }}"
-        owner: root
-        group: "{{ service_user }}"
-        mode: '0640'
-      loop: [assets/oob-logo.png, assets/app-icon-192.png, assets/app-icon-512.png, assets/app-icon.svg, manifest.webmanifest, service-worker.js, attendance.py, attendance.js, tests/test_attendance.py, app.py, password_reset.py, password-reset.js, database.py, advanced.py, tax_preparation.py, tax_rules.py, tax-preparation.js, tax_analyst.py, tax_filing.py, tax_analyst_control.py, tax_analyst_billing.py, tax_analysis_report.py, tax_automation_worker.py, tax-management.js, wallet.py, wallet.js, cashout.py, cashout.js, tax_services.py, coupons.py, tax-analyst.js, international.py, international.js, provider_settings.py, support.py, support-ui.js, marketplace.py, bank_import.py, worker.py, backup.py, index.html, advanced.js, workspace.js, requirements.txt, tests/test_app.py, tests/test_advanced.py, tests/test_setup.py, tests/test_tenants.py, tests/test_bank_import.py, tests/test_marketplace.py, tests/test_support.py, tests/test_international.py, tests/test_tax_preparation.py, tests/test_tax_analyst.py, tests/test_tax_bookkeeping.py, tests/test_tax_services.py, tests/test_coupons.py, tests/test_watchdog.py]
+    - name: Stage the complete committed source including test fixtures and resources
+      block:
+        - name: Allocate controller source archive
+          ansible.builtin.tempfile:
+            state: file
+            suffix: .tar
+          delegate_to: localhost
+          become: false
+          register: release_archive
+        - name: Archive complete committed application
+          ansible.builtin.command:
+            argv: [git, -C, '{{ app_source }}', archive, --format=tar, '--output={{ release_archive.path }}', HEAD]
+          delegate_to: localhost
+          become: false
+        - name: Extract complete versioned release
+          ansible.builtin.unarchive:
+            src: '{{ release_archive.path }}'
+            dest: '{{ app_root }}/releases/{{ release_id }}'
+            owner: root
+            group: '{{ service_user }}'
+            mode: 'u=rwX,g=rX,o='
+      always:
+        - name: Remove temporary controller archive
+          ansible.builtin.file:
+            path: '{{ release_archive.path }}'
+            state: absent
+          delegate_to: localhost
+          become: false
+          when: release_archive is defined and release_archive.path is defined
     - name: Create isolated build environment and install pinned dependencies
       ansible.builtin.pip:
         requirements: "{{ app_root }}/releases/{{ release_id }}/requirements.txt"
