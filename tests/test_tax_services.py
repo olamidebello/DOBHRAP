@@ -8,6 +8,22 @@ class TaxServiceTests(unittest.TestCase):
  tearDown=fixtures.TenantTests.tearDown
  request=fixtures.TenantTests.request
  login=fixtures.TenantTests.login
+ def test_account_type_personal_and_business_persist_with_correct_access(self):
+  for kind in ('personal','business'):
+   body={'account_type':kind,'company':'Example business','email':kind+'@example.com','password':'workspace-password-123','confirm_password':'workspace-password-123','role':'super_admin'}
+   tid=self.request('/api/register',body)['tenant_id'];client,csrf=self.login(body['email']);me=self.request('/api/me',client=client)
+   self.assertEqual(me['role'],'admin');self.assertEqual(me['tenant']['service_mode'],'tax_only' if kind=='personal' else 'business')
+   if kind=='personal':
+    self.assertEqual(me['modules'],{});self.assertEqual(me['tenant']['name'],'Personal tax account')
+   else:
+    self.assertTrue(me['modules']);self.assertEqual(me['tenant']['name'],'Example business');self.request('/api/dashboard',client=client)
+   with app.connect() as c:self.assertEqual(c.execute('SELECT service_mode FROM tenants WHERE id=?',(tid,)).fetchone()[0],me['tenant']['service_mode'])
+ def test_account_type_validation_before_workspace_allocation(self):
+  for changes in ({'account_type':'unknown'},{'account_type':'personal','service_mode':'business'},{'account_type':'business','company':''}):
+   body={'email':'invalid-type@example.com','password':'workspace-password-123','confirm_password':'workspace-password-123',**changes}
+   with self.assertRaises(HTTPError) as error:self.request('/api/register',body)
+   self.assertEqual(error.exception.code,400)
+  with app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM tenants').fetchone()[0],1)
  def account(self):
   body={'service_mode':'tax_only','email':'tax@example.com','password':'workspace-password-123','confirm_password':'workspace-password-123'}
   tid=self.request('/api/register',body)['tenant_id'];client,csrf=self.login('tax@example.com');return tid,client,csrf

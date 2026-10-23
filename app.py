@@ -84,6 +84,12 @@ def register_workspace(c,body):
  c.execute('BEGIN IMMEDIATE')
  if not c.execute('SELECT 1 FROM users').fetchone(): raise advanced.ServiceError('Complete platform setup first',409)
  mode=body.get('service_mode','business')
+ account_type=body.get('account_type')
+ if account_type is not None:
+  if account_type not in ('personal','business'):raise ValueError('Choose Personal or Business account type')
+  expected='tax_only' if account_type=='personal' else 'business'
+  if 'service_mode' in body and mode!=expected:raise ValueError('Account type does not match requested services')
+  mode=expected
  if mode not in ('business','tax_only'):raise ValueError('Invalid account type')
  company='Personal tax account' if mode=='tax_only' else str(body.get('company','')).strip();email=str(body.get('email','')).strip().lower();p=str(body.get('password',''))
  if not company or len(company)>150:raise ValueError('Business name is required (maximum 150 characters)')

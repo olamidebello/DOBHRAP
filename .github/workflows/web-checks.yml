@@ -67,6 +67,7 @@ jobs:
           node tests/tax-bookkeeping-ui.cjs
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/ai-service-oob.yml
           node tests/ai-service-ui.cjs
+          ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/account-types-oob.yml
       - name: Start synthetic test server
         run: |
           python tests/browser_fixture.py > /tmp/oob-browser-server.log 2>&1 &
@@ -78,9 +79,11 @@ jobs:
           exit 1
       - name: Check desktop and mobile interactions
         run: |
+          node tests/browser-account-types.cjs
           node tests/browser-smoke.cjs
           node tests/browser-client-agreement.cjs
           node tests/browser-attendance.cjs
+          node tests/browser-navigation.cjs
           node tests/browser-password-recovery.cjs
       - uses: actions/upload-artifact@v4
         if: always()
