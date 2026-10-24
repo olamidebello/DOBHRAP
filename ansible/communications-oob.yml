@@ -1,0 +1,68 @@
+---
+- import_playbook: repair-oob.yml
+
+- name: Install automatic signup email, SIP and PBX provisioning
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Commission existing approved mail policy and private SIP bridge token
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/configure-communications.py]
+      register: comms_ready
+    - name: Install fixed-operation provisioning worker
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dobhrap-communications.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=DOBHRAP managed signup phone and email provisioning
+          After=oob-business.service network-online.target
+          [Service]
+          Type=oneshot
+          User=root
+          UMask=0077
+          EnvironmentFile=/etc/dobhrap.env
+          EnvironmentFile=-/etc/dobhrap-mysql.env
+          EnvironmentFile=/etc/dobhrap-communications.env
+          WorkingDirectory=/opt/dobhrap/current
+          ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/communications_worker.py
+          TimeoutStartSec=240
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectHome=read-only
+          ProtectSystem=strict
+          ReadWritePaths=/var/lib/dobhrap /run/lock
+    - name: Install bounded provisioning timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dobhrap-communications.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Provision DOBHRAP managed services every minute
+          [Timer]
+          OnBootSec=45
+          OnUnitInactiveSec=60
+          Unit=dobhrap-communications.service
+          [Install]
+          WantedBy=timers.target
+    - name: Enable automatic provisioning
+      ansible.builtin.systemd:
+        name: dobhrap-communications.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Verify deployed communications GUI
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/communications.js
+        return_content: true
+        status_code: 200
+      register: comms_gui
+      failed_when: "'communications/status' not in comms_gui.content"
+      changed_when: false
+    - name: Report configured services and remaining activation requirements
+      ansible.builtin.debug:
+        msg:
+          - '{{ comms_ready.stdout }}'
+          - 'Phone and PBX bridge must be installed on sip.dobhrap.com. Copy its private /root/dobhrap-sip-bridge-token to this hosting server before commissioning.'
+          - 'Email uses existing OlamidePanel mail-policy.json, an approved domain delegation and its mailbox worker; it does not replace DNS or reconfigure unrelated mail domains.'
