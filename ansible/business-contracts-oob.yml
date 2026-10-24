@@ -1,0 +1,21 @@
+---
+- import_playbook: repair-oob.yml
+- name: Commission business profiles SAM.gov searches and proposal workspace
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Import saved SAM.gov key and verify access without exposing credentials
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/configure-sam.py]
+      register: sam_commission
+    - name: Verify deployed business interface resources
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/business-contracts.js
+        status_code: 200
+        return_content: true
+      register: business_gui
+      failed_when: "'business/sam-admin' not in business_gui.content"
+    - name: Report provisioning readiness
+      ansible.builtin.debug:
+        msg: '{{ sam_commission.stdout }}'

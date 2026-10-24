@@ -11,8 +11,9 @@ import json
 import time
 from urllib.parse import urlsplit
 
-SECRET_FIELDS={'ANTHROPIC_API_KEY','SIP_BRIDGE_TOKEN','SMTP_PASSWORD','SUPPORT_WEBHOOK_TOKEN','OPENAI_API_KEY','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','PAYSTACK_SECRET_KEY','PLAID_CLIENT_ID','PLAID_SECRET','CHECK_API_KEY','EFILE_GATEWAY_TOKEN'}
+SECRET_FIELDS={'SAM_API_KEY','ANTHROPIC_API_KEY','SIP_BRIDGE_TOKEN','SMTP_PASSWORD','SUPPORT_WEBHOOK_TOKEN','OPENAI_API_KEY','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','PAYSTACK_SECRET_KEY','PLAID_CLIENT_ID','PLAID_SECRET','CHECK_API_KEY','EFILE_GATEWAY_TOKEN'}
 FIELDS={
+ 'SAM_API_KEY':'secret',
  'ANTHROPIC_API_KEY':'secret','CLAUDE_MODEL':'text',
  'SIP_BRIDGE_TOKEN':'secret',
  'SMTP_HOST':'text','SMTP_PORT':'port','SMTP_USERNAME':'email_text','SMTP_PASSWORD':'secret','SMTP_FROM':'email','SMTP_SECURITY':['starttls','tls','local'],
@@ -79,6 +80,14 @@ def check(provider):
  if provider=='smtp':
   import password_reset
   return password_reset.check_mail_connection()
+ elif provider=='sam':
+  from datetime import date,timedelta
+  from urllib.parse import urlencode
+  key=get('SAM_API_KEY','')
+  if not key:raise a.ServiceError('Save a SAM.gov API key first')
+  today=date.today();params={'api_key':key,'postedFrom':(today-timedelta(days=1)).strftime('%m/%d/%Y'),'postedTo':today.strftime('%m/%d/%Y'),'limit':1,'offset':0}
+  result=a.request_json('https://api.sam.gov/opportunities/v2/search?'+urlencode(params),method='GET')
+  if not isinstance(result.get('opportunitiesData'),list):raise a.ServiceError('SAM.gov returned an unrecognized response',502)
  elif provider=='claude':
   key=get('ANTHROPIC_API_KEY','');model=get('CLAUDE_MODEL','')
   if not key or not model:raise a.ServiceError('Configure a Claude key and model first')
@@ -150,7 +159,7 @@ def dispatch(path,method,body,c,user):
   return {'ok':True}
  if action=='test':
   provider=body.get('provider')
-  if provider not in ('smtp','openai','claude','stripe','paystack','plaid'):raise a.ServiceError('Unsupported provider')
+  if provider not in ('smtp','openai','claude','sam','stripe','paystack','plaid'):raise a.ServiceError('Unsupported provider')
   started=time.monotonic()
   try:result=check(provider)
   except Exception:result={'ok':False,'message':'Connection check failed. Check credentials, environment, model access and provider status.'}

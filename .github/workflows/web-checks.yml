@@ -69,6 +69,8 @@ jobs:
           node tests/ai-service-ui.cjs
           ansible-playbook -i dobhrap, -c local --syntax-check ansible/provision-panel-mail-oob.yml
           node tests/communications-ui.cjs
+          node tests/business-contracts-ui.cjs
+          ansible-playbook -i dobhrap, -c local --syntax-check ansible/business-contracts-oob.yml
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/communications-oob.yml
           ansible-playbook -i localhost, -c local --syntax-check ansible/pull-and-deploy.yml
           bash -n ansible/pull-and-deploy.sh

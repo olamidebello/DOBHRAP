@@ -1,6 +1,16 @@
 ---
 - import_playbook: repair-oob.yml
 
+- name: Commission saved SAM.gov access independently of email setup
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Automatically commission saved SAM.gov credentials and access policy
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/configure-sam.py]
+      register: sam_auto_ready
+
 - import_playbook: provision-panel-mail-oob.yml
   when: dobhrap_auto_panel_mail | default(true) | bool
 
