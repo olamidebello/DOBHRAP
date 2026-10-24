@@ -67,6 +67,7 @@ jobs:
           node tests/tax-bookkeeping-ui.cjs
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/ai-service-oob.yml
           node tests/ai-service-ui.cjs
+          ansible-playbook -i dobhrap, -c local --syntax-check ansible/provision-panel-mail-oob.yml
           node tests/communications-ui.cjs
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/communications-oob.yml
           ansible-playbook -i localhost, -c local --syntax-check ansible/pull-and-deploy.yml

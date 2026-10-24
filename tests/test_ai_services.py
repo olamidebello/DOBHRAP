@@ -65,3 +65,18 @@ class AIServiceTests(unittest.TestCase):
   self.enable();self.credit();q=self.quote();self.assertGreater(q['maximum_cents'],0);self.assertEqual(self.status()['balances'][0]['balance'],1000)
   with app.connect() as c:
    with self.assertRaises(a.ServiceError):service.dispatch('/api/ai-service/admin','POST',{'policy':dict(service.DEFAULT),'revision':1},c,self.root,1)
+
+ def test_claude_request_and_cost_plus_settlement(self):
+  p=dict(service.DEFAULT,provider='claude',enabled=True,rates_verified=True,model='claude-test')
+  with app.connect() as c:service.dispatch('/api/ai-service/admin','POST',{'policy':p,'revision':1},c,self.root,1)
+  self.credit();body=self.request();response={'id':'msg_test','model':'claude-test','stop_reason':'max_tokens','usage':{'input_tokens':100,'output_tokens':10,'cache_read_input_tokens':20,'cache_creation_input_tokens':0},'content':[{'type':'text','text':'Claude answer'}]}
+  with patch.object(service.settings,'get',return_value='synthetic-key'),patch.object(a,'request_json',return_value=response) as api,app.connect() as c:
+   result=service.chat(c,body,self.user,1);self.assertEqual(result['state'],'completed');self.assertEqual(result['provider'],'claude');self.assertEqual(result['answer'],'Claude answer');self.assertEqual(result['billing']['input_tokens'],120);self.assertEqual(result['billing']['markup_percent'],30)
+   self.assertEqual(api.call_args.args[0],'https://api.anthropic.com/v1/messages');self.assertIn('x-api-key',api.call_args.args[2]);self.assertNotIn('Authorization',api.call_args.args[2]);self.assertNotIn('cache_control',str(api.call_args.args[1]))
+   again=service.chat(c,body,self.user,1);self.assertEqual(again['id'],result['id']);self.assertEqual(api.call_count,1)
+ def test_claude_cache_writes_require_reconciliation(self):
+  p=dict(service.DEFAULT,provider='claude',enabled=True,rates_verified=True,model='claude-test')
+  with app.connect() as c:service.dispatch('/api/ai-service/admin','POST',{'policy':p,'revision':1},c,self.root,1)
+  self.credit();result,calls=self.call(self.request(),{'id':'msg_test','usage':{'input_tokens':10,'output_tokens':1,'cache_creation_input_tokens':10}});self.assertEqual(result['state'],'reconcile');self.assertEqual(calls,1)
+ def test_legacy_openai_policy_remains_supported(self):
+  p=dict(service.DEFAULT);p.pop('provider');self.assertEqual(service.clean({'policy':p})['provider'],'openai')

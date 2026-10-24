@@ -1,6 +1,9 @@
 ---
 - import_playbook: repair-oob.yml
 
+- import_playbook: provision-panel-mail-oob.yml
+  when: dobhrap_auto_panel_mail | default(true) | bool
+
 - name: Install automatic signup email, SIP and PBX provisioning
   hosts: dobhrap
   become: true

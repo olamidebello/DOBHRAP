@@ -1,0 +1,34 @@
+---
+- name: Automatically provision the application domain through installed OlamidePanel
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require installed OlamidePanel mail runtime and deployment workflow
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: [/opt/olamidepanel/venv/bin/python, /opt/olamidepanel/panel/database.py, /opt/olamidepanel/repo/ansible/provision-all-domain-email.yml]
+      register: panel_mail_files
+    - name: Require the existing local hosting panel
+      ansible.builtin.assert:
+        that: item.stat.exists
+        fail_msg: Install or update OlamidePanel on this application host before automatic mail provisioning
+      loop: '{{ panel_mail_files.results }}'
+    - name: Derive private mail inputs while retaining existing domains and accounts
+      ansible.builtin.command:
+        argv: [/opt/dobhrap/current/venv/bin/python, /opt/dobhrap/current/ansible/prepare-panel-mail.py]
+    - name: Provision SMTP IMAP TLS domain delegation and mailbox worker through OlamidePanel
+      ansible.builtin.command:
+        argv: [bash, -c, "umask 077; ansible-playbook -i 'panel_servers,' -c local /opt/olamidepanel/repo/ansible/provision-all-domain-email.yml -e @/etc/dobhrap-panel-mail.json > /var/log/dobhrap-panel-mail.log 2>&1"]
+      no_log: true
+      register: panel_mail_install
+      failed_when: false
+    - name: Require successful panel email provisioning
+      ansible.builtin.assert:
+        that: panel_mail_install.rc == 0
+        fail_msg: OlamidePanel mail setup failed. Inspect /var/log/dobhrap-panel-mail.log privately on this server; credentials were not printed.
+    - name: Verify scheduled panel mailbox provisioning
+      ansible.builtin.systemd:
+        name: olamidepanel-mail.timer
+        enabled: true
+        state: started
