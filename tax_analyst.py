@@ -270,7 +270,9 @@ def dispatch(path,method,body,c,user):
  if route=='compile':return compile_year(c,body,user)
  if route=='prepare-years':
   years=body.get('years')
-  if body.get('confirm') is not True or not isinstance(years,list) or not 1<=len(years)<=6 or len(set(years))!=len(years):raise a.ServiceError('Confirm one to six distinct selected tax years')
+  if body.get('confirm') is not True:raise a.ServiceError('Confirm that you reviewed the records before preparing worksheets')
+  if isinstance(years,list) and not years:raise a.ServiceError('No approved years selected. Review and approve document records before preparing worksheets')
+  if not isinstance(years,list) or not 1<=len(years)<=6 or any(type(y) is not int for y in years) or len(set(years))!=len(years):raise a.ServiceError('Choose one to six distinct supported tax years')
   for y in years:year(y)
   results=[]
   for y in years:

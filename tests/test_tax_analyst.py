@@ -90,3 +90,11 @@ class TaxAnalystTests(unittest.TestCase):
   app.init();__import__('tests.tax_billing_fixture',fromlist=['grant']).grant()
   with app.tenant_connect(tenant) as c:self.assertIsNotNone(c.execute("SELECT name FROM sqlite_master WHERE name='tax_analyst_documents'").fetchone())
 
+
+ def test_prepare_years_validation_explains_empty_and_confirmation(self):
+  with self.assertRaisesRegex(a.ServiceError,'No approved years'):
+   self.call('prepare-years',{'years':[],'confirm':True})
+  with self.assertRaisesRegex(a.ServiceError,'Confirm that you reviewed'):
+   self.call('prepare-years',{'years':[2026],'confirm':False})
+  for years in ([[2026]], [2026,2026], [True]):
+   with self.assertRaises(a.ServiceError):self.call('prepare-years',{'years':years,'confirm':True})
