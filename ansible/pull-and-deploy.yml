@@ -1,0 +1,30 @@
+---
+- name: Pull and deploy DOBHRAP on the existing application server
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Inspect existing application configuration
+      ansible.builtin.stat:
+        path: /etc/dobhrap.env
+      register: installed_application
+    - name: Require the existing application host
+      ansible.builtin.assert:
+        that: installed_application.stat.exists
+        fail_msg: Run on the existing DOBHRAP application server (154.16.170.86), not the SIP server. This playbook preserves the installed database and credentials.
+    - name: Install source checkout prerequisites
+      ansible.builtin.apt:
+        name: [git, ca-certificates, python3-venv, python3-pip, util-linux]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Lock, pull committed source and run the full deployment
+      ansible.builtin.script:
+        cmd: pull-and-deploy.sh
+        executable: /bin/bash
+      register: pull_deployment
+      changed_when: pull_deployment.rc == 0
+    - name: Report completed deployment
+      ansible.builtin.debug:
+        msg: '{{ pull_deployment.stdout_lines }}'

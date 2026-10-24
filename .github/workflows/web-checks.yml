@@ -69,6 +69,8 @@ jobs:
           node tests/ai-service-ui.cjs
           node tests/communications-ui.cjs
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/communications-oob.yml
+          ansible-playbook -i localhost, -c local --syntax-check ansible/pull-and-deploy.yml
+          bash -n ansible/pull-and-deploy.sh
           ansible-playbook -i 'dobhrap,' -c local --syntax-check ansible/account-types-oob.yml
       - name: Start synthetic test server
         run: |
