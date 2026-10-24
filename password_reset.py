@@ -134,6 +134,7 @@ def finish(c, body, ip):
     digest=hashlib.sha256(token.encode()).hexdigest()
     row=c.execute('SELECT user_id FROM password_resets WHERE token_hash=? AND used=0 AND expires>?',(digest,now)).fetchone()
     if not row:c.commit();raise a.ServiceError('Reset link is invalid or expired',400)
+    if c.execute("SELECT account_status FROM users WHERE id=?",(row['user_id'],)).fetchone()[0]!='active':raise a.ServiceError('Account unavailable',403)
     update_password(c,row['user_id'],body)
     return {'ok':True,'message':'Password updated. Sign in with your new password.'}
 

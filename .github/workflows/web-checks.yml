@@ -92,6 +92,7 @@ jobs:
           node tests/browser-client-agreement.cjs
           node tests/browser-attendance.cjs
           node tests/browser-navigation.cjs
+          node tests/browser-user-management.cjs
           node tests/browser-password-recovery.cjs
       - uses: actions/upload-artifact@v4
         if: always()

@@ -64,9 +64,9 @@ def save(c,r,p,state):
 def run(app):
  with app.connect() as c:
   flags=comms.policy(c)['values'];instance=c.execute('SELECT value FROM communications_identity WHERE id=1').fetchone()[0]
-  for user in c.execute("SELECT u.id,u.tenant_id,t.service_mode FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.status='active' ORDER BY u.id").fetchall():comms.enqueue(c,user['id'],user['tenant_id'],user['service_mode'])
+  for user in c.execute("SELECT u.id,u.tenant_id,t.service_mode FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.status='active' AND u.account_status='active' ORDER BY u.id").fetchall():comms.enqueue(c,user['id'],user['tenant_id'],user['service_mode'])
   c.commit()
-  jobs=c.execute("SELECT a.* FROM communications_accounts a JOIN users u ON u.id=a.owner AND u.tenant_id=a.tenant_id JOIN tenants t ON t.id=a.tenant_id WHERE t.status='active' AND a.state IN ('queued','blocked','awaiting_switch','awaiting_mail') AND a.next_attempt<=? ORDER BY a.updated,a.owner LIMIT 10",(int(time.time()),)).fetchall()
+  jobs=c.execute("SELECT a.* FROM communications_accounts a JOIN users u ON u.id=a.owner AND u.tenant_id=a.tenant_id JOIN tenants t ON t.id=a.tenant_id WHERE t.status='active' AND u.account_status='active' AND a.state IN ('queued','blocked','awaiting_switch','awaiting_mail') AND a.next_attempt<=? ORDER BY a.updated,a.owner LIMIT 10",(int(time.time()),)).fetchall()
   for r in jobs:
    if r['payload']:p=a.unseal(r['payload'])
    else:
@@ -85,7 +85,7 @@ def run(app):
   # A crashed sender may have handed the message to SMTP. Never resend automatically.
   c.execute("UPDATE communications_outbox SET state='uncertain',updated=? WHERE state='sending' AND updated<?",(int(time.time()),int(time.time())-300));c.commit()
   if not flags['mail_enabled']:return
-  messages=c.execute("SELECT o.* FROM communications_outbox o JOIN tenants t ON t.id=o.tenant_id JOIN users u ON u.id=o.owner AND u.tenant_id=o.tenant_id WHERE o.state='queued' AND t.status='active' ORDER BY o.created LIMIT 5").fetchall()
+  messages=c.execute("SELECT o.* FROM communications_outbox o JOIN tenants t ON t.id=o.tenant_id JOIN users u ON u.id=o.owner AND u.tenant_id=o.tenant_id WHERE o.state='queued' AND t.status='active' AND u.account_status='active' ORDER BY o.created LIMIT 5").fetchall()
   for row in messages:
    try:
     account,p=comms.owned(c,{'id':row['owner'],'tenant_id':row['tenant_id']},'mail')

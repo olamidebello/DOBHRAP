@@ -10,6 +10,7 @@ import marketplace
 import ai_services
 import communications
 import business_contracts
+import user_management
 import provider_settings
 import support
 import international
@@ -130,6 +131,7 @@ def init():
   ai_services.initialize(c)
   communications.initialize(c)
   business_contracts.initialize(c)
+  user_management.initialize(c)
   cashout.initialize(c)
   coupons.initialize(c)
   tax_analyst_billing.initialize(c)
@@ -220,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/business-contracts.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/business-contracts.js','/user-management.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -277,13 +279,15 @@ class Handler(BaseHTTPRequestHandler):
      c.commit();self.reply(200,result);return
     if path=='/api/login' and self.command=='POST':
      u=c.execute('SELECT * FROM users WHERE lower(email)=?',(str(body.get('email','')).strip().lower(),)).fetchone()
-     if not u or not hmac.compare_digest(u['hash'],password(body.get('password',''),u['salt'])): time.sleep(.5); self.reply(401,{'error':'Invalid credentials'}); return
+     if not u or u['account_status']!='active' or not hmac.compare_digest(u['hash'],password(body.get('password',''),u['salt'])): time.sleep(.5); self.reply(401,{'error':'Invalid credentials'}); return
      tenant=c.execute('SELECT status FROM tenants WHERE id=?',(u['tenant_id'],)).fetchone()
      if not tenant or (tenant['status']!='active' and u['role']!='super_admin'):self.reply(403,{'error':'Workspace is suspended'});return
      token=secrets.token_hex(32); csrf=secrets.token_hex(24); c.execute('DELETE FROM sessions WHERE expires<?',(int(time.time()),)); c.execute('INSERT INTO sessions VALUES(?,?,?,?)',(token,u['id'],int(time.time())+28800,csrf)); self.reply(200,{'csrf':csrf},'session='+token+'; HttpOnly; SameSite=Strict; Path=/'+('; Secure' if os.environ.get('DOBHRAP_SECURE_COOKIE')=='1' else '')); return
     cookies=SimpleCookie(self.headers.get('Cookie','')); token=cookies['session'].value if 'session' in cookies else ''; u=c.execute('SELECT users.*,sessions.csrf FROM users JOIN sessions ON users.id=sessions.user_id WHERE token=? AND expires>?',(token,int(time.time()))).fetchone()
-    if not u:self.reply(401,{'error':'Sign in required'}); return
+    if not u or u['account_status']!='active':self.reply(401,{'error':'Sign in required'}); return
     if self.command=='POST' and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),u['csrf']): self.reply(403,{'error':'Invalid CSRF token'}); return
+    management=user_management.dispatch(path,self.command,body,c,u)
+    if management is not None:c.commit();self.reply(200,management);return
     if path=='/api/logout' and self.command=='POST': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
     if path in ('/api/password-reset/admin','/api/password/change') and self.command=='POST':
      result=password_reset.authenticated(c,u,body,admin=path.endswith('/admin'));c.commit();self.reply(200,result);return
