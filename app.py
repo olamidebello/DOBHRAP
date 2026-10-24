@@ -403,8 +403,14 @@ class Handler(BaseHTTPRequestHandler):
   except sqlite3.OperationalError:
    self.log_error('Database operation failed; check database availability, permissions and migrations')
    self.reply(503,{'error':'The workspace database is temporarily unavailable. Please try again shortly.'})
+  except OSError:
+   self.log_error('Workspace storage or operating-system operation failed; check application data ownership, disk space and service logs')
+   self.reply(503,{'error':'Workspace storage is temporarily unavailable. Contact the administrator; please try again after the service is repaired.'})
   except advanced.ServiceError as e:self.reply(e.status,{'error':str(e)})
   except (ValueError,KeyError,TypeError,sqlite3.IntegrityError) as e:self.reply(400,{'error':str(e)})
+  except Exception as e:
+   self.log_error('Unhandled application operation: %s; request failed without logging submitted data',type(e).__name__)
+   self.reply(500,{'error':'The service could not complete this request. Contact the administrator before submitting it again.'})
 if __name__=='__main__':
  init(); ThreadingHTTPServer(('127.0.0.1',int(os.environ.get('PORT','8080'))),Handler).serve_forever()
 

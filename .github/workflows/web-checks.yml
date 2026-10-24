@@ -83,6 +83,7 @@ jobs:
           exit 1
       - name: Check desktop and mobile interactions
         run: |
+          node tests/browser-registration-errors.cjs
           node tests/browser-account-types.cjs
           node tests/browser-smoke.cjs
           node tests/browser-client-agreement.cjs
