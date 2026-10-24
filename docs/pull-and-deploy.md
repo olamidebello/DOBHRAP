@@ -23,3 +23,5 @@ ansible-playbook -i localhost, -c local ansible/pull-and-deploy.yml
 ```
 
 This is the **application-host** deployment. Before phone provisioning can activate, install the SIP repository's `deployment/ansible/hosted-accounts.yml` on the SIP host and privately copy its `/root/dobhrap-sip-bridge-token` to this application host. Email requires the approved local OlamidePanel mail stack, delegated domain and mailbox worker. The wrapper does not obtain SSH passwords, print tokens, purchase calling plans, or claim that unconfigured external services are working. See [communications.md](communications.md) for the complete two-server commissioning procedure.
+
+The staged release and virtual environment are root-owned with runtime-group read/traversal access. A runtime-account Python preflight now runs before the maintenance window. If data access, snapshot or activation fails in that window, the playbook attempts to restart previously running application services and active timers, then reports failure. It does not reset data or promise recovery after every later configuration failure.

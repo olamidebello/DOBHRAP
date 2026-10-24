@@ -4,7 +4,8 @@ let currentUserId=0,currentTenantId=1,pageTrail=[],taxOnlyAccount=false;
 const navGroups=[
  ['Overview',['dashboard','capabilities']],
  ['Platform',['cashout_admin','wallet_admin','tax_analyst_admin','platform_attendance','super_admin','tenants','watchdog','deployment','provider_keys','coupons']],
- ['Marketplace',['communications','ai_chat','cashout','wallet','marketplace','market_orders','market_services']],
+ ['Phone & PBX',['communications']],
+ ['Marketplace',['ai_chat','cashout','wallet','marketplace','market_orders','market_services']],
  ['Commerce administration',['commerce_admin','market_admin','subscription_plans','subscriptions_admin','payment_gateways','store_admin']],
  ['Sales & customers',['customers','products','invoices','projects']],
  ['Purchases & accounting',['vendors','bills','expenses','journals','reports','financial_statements']],

@@ -144,6 +144,27 @@
         PIP_CACHE_DIR: /var/cache/dobhrap/pip
         PIP_FIND_LINKS: '{{ dobhrap_pip_find_links | default("") }}'
         PIP_NO_INDEX: '{{ (dobhrap_pip_offline | default(false) | bool) | ternary("1", "0") }}'
+    - name: Grant runtime group read and traversal access to the staged release
+      ansible.builtin.file:
+        path: "{{ app_root }}/releases/{{ release_id }}"
+        owner: root
+        group: "{{ service_user }}"
+        mode: 'u=rwX,g=rX,o='
+        state: directory
+        recurse: true
+        follow: false
+    - name: Verify staged Python runs as the dedicated runtime account before stopping services
+      ansible.builtin.command:
+        argv:
+          - "{{ app_root }}/releases/{{ release_id }}/venv/bin/python"
+          - -c
+          - "import sqlite3, cryptography; from pathlib import Path; compile(Path('app.py').read_text(), 'app.py', 'exec')"
+        chdir: "{{ app_root }}/releases/{{ release_id }}"
+      become_user: "{{ service_user }}"
+      become_flags: '-H -S -n -g {{ service_user }}'
+      vars:
+        ansible_remote_tmp: /tmp/.ansible-oob-app
+      changed_when: false
     - name: Run release tests before activation
       ansible.builtin.command:
         argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", -m, unittest, discover, -s, tests, -v]
@@ -211,65 +232,90 @@
           DOBHRAP_ENABLE_EFILE_TRANSMISSION={{ '1' if enable_efile_transmission else '0' }}
       no_log: true
       notify: Restart DOBHRAP
-    - name: Stop background processing during migration
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: stopped
-      loop: ["{{ service_name }}-worker.timer", "{{ service_name }}-worker.service", "{{ service_name }}-bank-import.timer", "{{ service_name }}-bank-import.service", "{{ service_name }}-marketplace.timer", "{{ service_name }}-marketplace.service", "{{ service_name }}-support.timer", "{{ service_name }}-support.service"]
-      failed_when: false
-    - name: Inspect installed application services
+    - name: Capture service states before the migration maintenance window
       ansible.builtin.service_facts:
-    - name: Stop existing web and backup services before data ownership migration
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: stopped
-      loop: ["{{ service_name }}.service", "{{ service_name }}-backup.timer", "{{ service_name }}-backup.service"]
-      when: item in ansible_facts.services
-    - name: Assign persistent application data to dedicated service account
-      ansible.builtin.file:
-        path: "{{ item }}"
-        owner: "{{ service_user }}"
-        group: "{{ service_user }}"
-        recurse: true
-        state: directory
-        mode: 'u=rwX,g=,o='
-      loop: [/var/lib/dobhrap, /var/backups/dobhrap]
-    - name: Verify database directory and existing database as the runtime account
+    - name: Capture active application timers before stopping them
       ansible.builtin.command:
-        argv:
-          - "{{ app_root }}/releases/{{ release_id }}/venv/bin/python"
-          - -c
-          - |
-            import pathlib, sqlite3, tempfile
-            root = pathlib.Path('/var/lib/dobhrap')
-            with tempfile.TemporaryFile(dir=root) as probe:
-                probe.write(b'database-access-probe')
-                probe.flush()
-            db = root / 'dobhrap.db'
-            if db.exists():
-                with sqlite3.connect(db.as_uri() + '?mode=rw', uri=True, timeout=30) as c:
-                    c.execute('SELECT name FROM sqlite_master LIMIT 1').fetchone()
-                    c.execute('BEGIN IMMEDIATE')
-                    c.rollback()
-      become_user: "{{ service_user }}"
-      vars:
-        ansible_remote_tmp: /tmp/.ansible-oob-app
+        argv: [systemctl, is-active, '{{ item }}']
+      loop: ["{{ service_name }}-worker.timer", "{{ service_name }}-bank-import.timer", "{{ service_name }}-marketplace.timer", "{{ service_name }}-support.timer", "{{ service_name }}-backup.timer"]
+      register: migration_timer_states
       changed_when: false
-    - name: Save pre-migration database snapshot if present
-      ansible.builtin.command:
-        argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", "{{ app_root }}/releases/{{ release_id }}/backup.py"]
-      environment:
-        DOBHRAP_DB: /var/lib/dobhrap/dobhrap.db
-      become_user: "{{ service_user }}"
-      vars:
-        ansible_remote_tmp: /tmp/.ansible-oob-app
-      changed_when: false
-    - name: Activate tested source atomically
-      ansible.builtin.file:
-        src: "{{ app_root }}/releases/{{ release_id }}"
-        dest: "{{ app_root }}/current"
-        state: link
-      notify: Restart DOBHRAP
+      failed_when: false
+    - name: Remember services and timers that were running
+      ansible.builtin.set_fact:
+        migration_running_units: "{{ (ansible_facts.services | dict2items | selectattr('value.state', 'equalto', 'running') | map(attribute='key') | select('match', '^' + service_name + '(\\.|-)') | list) + (migration_timer_states.results | selectattr('stdout', 'equalto', 'active') | map(attribute='item') | list) }}"
+    - name: Migrate and activate with recovery of previously running services
+      block:
+        - name: Stop background processing during migration
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            state: stopped
+          loop: ["{{ service_name }}-worker.timer", "{{ service_name }}-worker.service", "{{ service_name }}-bank-import.timer", "{{ service_name }}-bank-import.service", "{{ service_name }}-marketplace.timer", "{{ service_name }}-marketplace.service", "{{ service_name }}-support.timer", "{{ service_name }}-support.service"]
+          failed_when: false
+        - name: Stop existing web and backup services before data ownership migration
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            state: stopped
+          loop: ["{{ service_name }}.service", "{{ service_name }}-backup.timer", "{{ service_name }}-backup.service"]
+          when: item in ansible_facts.services
+        - name: Assign persistent application data to dedicated service account
+          ansible.builtin.file:
+            path: "{{ item }}"
+            owner: "{{ service_user }}"
+            group: "{{ service_user }}"
+            recurse: true
+            state: directory
+            mode: 'u=rwX,g=,o='
+          loop: [/var/lib/dobhrap, /var/backups/dobhrap]
+        - name: Verify database directory and existing database as the runtime account
+          ansible.builtin.command:
+            argv:
+              - "{{ app_root }}/releases/{{ release_id }}/venv/bin/python"
+              - -c
+              - |
+                import pathlib, sqlite3, tempfile
+                root = pathlib.Path('/var/lib/dobhrap')
+                with tempfile.TemporaryFile(dir=root) as probe:
+                    probe.write(b'database-access-probe')
+                    probe.flush()
+                db = root / 'dobhrap.db'
+                if db.exists():
+                    with sqlite3.connect(db.as_uri() + '?mode=rw', uri=True, timeout=30) as c:
+                        c.execute('SELECT name FROM sqlite_master LIMIT 1').fetchone()
+                        c.execute('BEGIN IMMEDIATE')
+                        c.rollback()
+          become_user: "{{ service_user }}"
+          become_flags: '-H -S -n -g {{ service_user }}'
+          vars:
+            ansible_remote_tmp: /tmp/.ansible-oob-app
+          changed_when: false
+        - name: Save pre-migration database snapshot if present
+          ansible.builtin.command:
+            argv: ["{{ app_root }}/releases/{{ release_id }}/venv/bin/python", "{{ app_root }}/releases/{{ release_id }}/backup.py"]
+          environment:
+            DOBHRAP_DB: /var/lib/dobhrap/dobhrap.db
+          become_user: "{{ service_user }}"
+          become_flags: '-H -S -n -g {{ service_user }}'
+          vars:
+            ansible_remote_tmp: /tmp/.ansible-oob-app
+          changed_when: false
+        - name: Activate tested source atomically
+          ansible.builtin.file:
+            src: "{{ app_root }}/releases/{{ release_id }}"
+            dest: "{{ app_root }}/current"
+            state: link
+          notify: Restart DOBHRAP
+      rescue:
+        - name: Resume previously running units after pre-activation migration failure
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            state: started
+          loop: "{{ migration_running_units }}"
+          register: migration_recovery
+          failed_when: false
+        - name: Report migration failure after attempted service recovery
+          ansible.builtin.fail:
+            msg: "Deployment failed during {{ ansible_failed_task.name }}. Restart of previously running units was attempted. Review their status and this deployment log; the database was not reset."
     - name: Install restricted service units
       ansible.builtin.copy:
         dest: "/etc/systemd/system/{{ item.name }}.service"

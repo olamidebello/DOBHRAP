@@ -7,6 +7,7 @@ import provider_settings as settings
 
 
 def initialize(c):
+ c.execute('CREATE TABLE IF NOT EXISTS business_branding(tenant_id INTEGER PRIMARY KEY,logo TEXT NOT NULL,updated INTEGER NOT NULL)')
  c.execute('CREATE TABLE IF NOT EXISTS communications_policy(id INTEGER PRIMARY KEY,revision INTEGER NOT NULL,payload TEXT NOT NULL)')
  c.execute('INSERT OR IGNORE INTO communications_policy VALUES(1,1,?)',(json.dumps({'sip_enabled':False,'mail_enabled':False}),))
  c.execute('CREATE TABLE IF NOT EXISTS communications_identity(id INTEGER PRIMARY KEY,value TEXT NOT NULL)')
@@ -78,6 +79,29 @@ def inbox(p):
 def dispatch(path,method,body,c,user,tid):
  if not path.startswith('/api/communications/'):return None
  route=path.rsplit('/',1)[-1]
+ if route=='branding':
+  tenant=c.execute('SELECT service_mode FROM tenants WHERE id=?',(user['tenant_id'],)).fetchone()
+  if tenant['service_mode']!='business':raise a.ServiceError('Business workspace required',403)
+  if method=='POST':
+   if user['role'] not in ('admin','super_admin'):raise a.ServiceError('Business administrator required',403)
+   import base64,io
+   from PIL import Image,ImageOps,UnidentifiedImageError
+   if body.get('remove') is True:logo=''
+   else:
+    try:
+     raw=base64.b64decode(body.get('image',''),validate=True)
+     if not 1<=len(raw)<=1048576:raise ValueError()
+     with Image.open(io.BytesIO(raw)) as source:
+      if source.format not in ('PNG','JPEG','WEBP') or source.width*source.height>16000000:raise ValueError()
+      image=ImageOps.exif_transpose(source).convert('RGBA');image.thumbnail((512,512));out=io.BytesIO();image.save(out,format='PNG',optimize=True)
+      if len(out.getvalue())>250000:raise ValueError()
+      logo='data:image/png;base64,'+base64.b64encode(out.getvalue()).decode()
+    except (ValueError,TypeError,OSError,UnidentifiedImageError,Image.DecompressionBombError):raise a.ServiceError('Upload a valid PNG, JPEG or WebP logo up to 1 MB') from None
+   c.execute('INSERT OR REPLACE INTO business_branding VALUES(?,?,?)',(user['tenant_id'],logo,int(time.time())))
+   c.execute("UPDATE communications_accounts SET state='queued',next_attempt=0 WHERE tenant_id=? AND kind='sip' AND owner=?",(user['tenant_id'],user['id']))
+   a.audit(c,user['id'],'Business logo changed')
+  row=c.execute('SELECT logo FROM business_branding WHERE tenant_id=?',(user['tenant_id'],)).fetchone()
+  return {'logo':row['logo'] if row else ''}
  if route=='admin':
   if user['role']!='super_admin':raise a.ServiceError('Super administrator required',403)
   if method=='POST':

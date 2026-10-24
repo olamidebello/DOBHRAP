@@ -83,3 +83,14 @@ class CommunicationsTests(unittest.TestCase):
    with app.connect() as c:self.assertEqual(c.execute('SELECT payload FROM communications_accounts WHERE owner=?',(user['id'],)).fetchone()[0],'')
   worker.run(app)
   with app.connect() as c:self.assertTrue(a.unseal(c.execute('SELECT payload FROM communications_accounts WHERE owner=?',(user['id'],)).fetchone()[0])['password'])
+
+ def test_business_logo_validation_storage_and_private_scope(self):
+  import base64,io
+  from PIL import Image
+  user,client,csrf=self.account('business');out=io.BytesIO();Image.new('RGB',(40,20),'green').save(out,format='JPEG')
+  result=self.request('/api/communications/branding',{'image':base64.b64encode(out.getvalue()).decode()},client,csrf);self.assertTrue(result['logo'].startswith('data:image/png;base64,'))
+  other,other_client,other_csrf=self.account('business','other-brand@example.com');self.assertEqual(self.request('/api/communications/branding',client=other_client)['logo'],'')
+  with self.assertRaises(HTTPError):self.request('/api/communications/branding',{'image':base64.b64encode(b'<svg onload=bad()>').decode()},client,csrf)
+  with app.connect() as c:c.execute("UPDATE users SET role='viewer' WHERE id=?",(user['id'],))
+  with self.assertRaises(HTTPError) as error:self.request('/api/communications/branding',{'remove':True},client,csrf)
+  self.assertEqual(error.exception.code,403)
