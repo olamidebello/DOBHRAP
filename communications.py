@@ -87,7 +87,7 @@ def dispatch(path,method,body,c,user,tid):
    a.audit(c,user['id'],'Communications provisioning policy changed')
   return policy(c)|{'accounts':[dict(r) for r in c.execute('SELECT owner,tenant_id,kind,state,attempts,updated FROM communications_accounts ORDER BY updated DESC LIMIT 200')],'sip_bridge_configured':bool(settings.get('SIP_BRIDGE_TOKEN'))}
  if route=='status' and method=='GET':
-  return policy(c)|{'accounts':[public(r) for r in c.execute('SELECT * FROM communications_accounts WHERE owner=? AND tenant_id=? ORDER BY kind',(user['id'],user['tenant_id']))],'outbox':[dict(r) for r in c.execute('SELECT id,state,created,updated FROM communications_outbox WHERE owner=? AND tenant_id=? ORDER BY created DESC LIMIT 30',(user['id'],user['tenant_id']))],'phone_portal':'https://sip.dobhrap.com/'}
+  return policy(c)|{'workspace':dict(c.execute('SELECT name,service_mode FROM tenants WHERE id=?',(user['tenant_id'],)).fetchone()),'accounts':[public(r) for r in c.execute('SELECT * FROM communications_accounts WHERE owner=? AND tenant_id=? ORDER BY kind',(user['id'],user['tenant_id']))],'outbox':[dict(r) for r in c.execute('SELECT id,state,created,updated FROM communications_outbox WHERE owner=? AND tenant_id=? ORDER BY created DESC LIMIT 30',(user['id'],user['tenant_id']))],'phone_portal':'https://sip.dobhrap.com/'}
  if method!='POST':raise a.ServiceError('POST required',405)
  if route=='credentials':return credentials(c,user,body)
  if route=='retry':
