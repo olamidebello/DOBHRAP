@@ -36,3 +36,4 @@ fi
 printf 'Deployment and public HTTPS checks passed for release %s.\n' "$release"
 echo "Private deployment log: $log"
 echo 'Phone/PBX requires its SIP bridge and shared token. Email requires the existing approved OlamidePanel mail configuration. Unconfigured services remain disabled.'
+echo 'Registration OTP and user management are installed. Configure Twilio privately under Super admin > Provider provisioning & keys, then provision/test/enable under Registration OTP & Twilio.'

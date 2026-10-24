@@ -25,6 +25,19 @@
         executable: /bin/bash
       register: pull_deployment
       changed_when: pull_deployment.rc == 0
+    - name: Verify deployed registration and user administration assets
+      ansible.builtin.uri:
+        url: "https://olamideolatayobello.com/{{ item.path }}"
+        return_content: true
+        status_code: 200
+        timeout: 20
+      loop:
+        - {path: registration-otp.js, marker: showRegistrationOTPAdmin}
+        - {path: user-management.js, marker: showUserManagement}
+        - {path: user-events.js, marker: showUserEvents}
+      register: deployed_asset
+      failed_when: item.marker not in deployed_asset.content
+      changed_when: false
     - name: Report completed deployment
       ansible.builtin.debug:
         msg: '{{ pull_deployment.stdout_lines }}'
