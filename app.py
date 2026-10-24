@@ -11,6 +11,9 @@ import ai_services
 import communications
 import business_contracts
 import user_management
+import user_data
+import user_events
+import registration_otp
 import provider_settings
 import support
 import international
@@ -61,7 +64,7 @@ def setup_account(c, body):
  if not 14<=len(p)<=1024: raise ValueError('Password must contain 14 to 1024 characters')
  if p!=body.get('confirm_password'): raise ValueError('Passwords do not match')
  salt=secrets.token_hex(16)
- uid=c.execute('INSERT INTO users(email,salt,hash,role) VALUES(?,?,?,?)',(email,salt,password(p,salt),'super_admin')).lastrowid
+ uid=c.execute('INSERT INTO users(id,email,salt,hash,role) VALUES(?,?,?,?,?)',(user_data.allocate(c),email,salt,password(p,salt),'super_admin')).lastrowid
  c.execute("DELETE FROM setup_state WHERE key='token_hash'")
  c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(uid,'Initial super administrator provisioned'))
  return {'ok':True}
@@ -85,6 +88,7 @@ def tenant_connect(tenant_id):
 
 def register_workspace(c,body,transaction_started=False):
  if not transaction_started:c.execute('BEGIN IMMEDIATE')
+ verified_phone=registration_otp.consume(c,body) if not transaction_started else None
  if not c.execute('SELECT 1 FROM users').fetchone(): raise advanced.ServiceError('Complete platform setup first',409)
  mode=body.get('service_mode','business')
  account_type=body.get('account_type')
@@ -108,8 +112,11 @@ def register_workspace(c,body,transaction_started=False):
   with sqlite3.connect(target) as tenant:initialize_business(tenant)
   target.chmod(0o600)
  salt=secrets.token_hex(16)
- c.execute('INSERT INTO users(email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?)',(email,salt,password(p,salt),'admin',tid))
+ c.execute('INSERT INTO users(id,email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?,?)',(user_data.allocate(c),email,salt,password(p,salt),'admin',tid))
  uid=c.execute('SELECT id FROM users WHERE lower(email)=?',(email,)).fetchone()[0]
+ if verified_phone:
+  c.execute('INSERT OR REPLACE INTO platform_user_profiles VALUES(?,?)',(uid,advanced.seal({'phone':verified_phone,'phone_verified':True})))
+  c.execute('UPDATE registration_otp_challenges SET user_id=? WHERE ticket_hash=?',(uid,hashlib.sha256(body['otp_ticket'].encode()).hexdigest()))
  communications.enqueue(c,uid,tid,mode)
  c.execute('INSERT INTO audit(user_id,action) VALUES(0,?)',('Workspace registered '+str(tid),))
  return {'ok':True,'tenant_id':tid}
@@ -132,6 +139,8 @@ def init():
   communications.initialize(c)
   business_contracts.initialize(c)
   user_management.initialize(c)
+  user_events.initialize(c)
+  registration_otp.initialize(c)
   cashout.initialize(c)
   coupons.initialize(c)
   tax_analyst_billing.initialize(c)
@@ -145,7 +154,7 @@ def init():
    p=os.environ.get('DOBHRAP_ADMIN_PASSWORD',''); email=os.environ.get('DOBHRAP_ADMIN_EMAIL','admin@example.com')
    if p:
     if len(p)<14: raise RuntimeError('Set DOBHRAP_ADMIN_PASSWORD to at least 14 characters')
-    s=secrets.token_hex(16); c.execute('INSERT INTO users(email,salt,hash,role) VALUES(?,?,?,?)',(email,s,password(p,s),'admin'))
+    s=secrets.token_hex(16); c.execute('INSERT INTO users(id,email,salt,hash,role) VALUES(?,?,?,?,?)',(user_data.allocate(c),email,s,password(p,s),'admin'))
    else:
     token=os.environ.get('DOBHRAP_SETUP_TOKEN','')
     if len(token)<32: raise RuntimeError('Configure DOBHRAP_SETUP_TOKEN with at least 32 characters for browser setup')
@@ -208,13 +217,22 @@ def dashboard(c, role):
  return result
 
 class Handler(BaseHTTPRequestHandler):
+ def log_request(self,code='-',size='-'):
+  self.log_message('"%s %s" %s',self.command,self.path.split('?',1)[0][:150],str(code))
  def reply(self,status,data,cookie=None):
+  self.event_status=status
   b=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff')
   if cookie:self.send_header('Set-Cookie',cookie)
   self.end_headers(); self.wfile.write(b)
  def do_GET(self): self.handle_request()
  def do_POST(self): self.handle_request()
  def handle_request(self):
+  self.event_actor=0;self.event_target=0;self.event_tenant=0;self.event_status=500;self.event_name=''
+  try:self._handle_request()
+  finally:
+   try:user_events.record(__import__('app'),self)
+   except Exception:self.log_error('Activity metadata could not be recorded')
+ def _handle_request(self):
   try:
    if self.command!='GET' and maintenance_active():raise advanced.ServiceError('Database migration in progress. Please try again shortly.',503)
    path=self.path.split('?')[0]; body={}
@@ -222,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/business-contracts.js','/user-management.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -270,6 +288,14 @@ class Handler(BaseHTTPRequestHandler):
     if path=='/api/setup' and self.command=='POST':
      if self.headers.get('X-Setup-Request')!='1': self.reply(403,{'error':'Use the setup page'}); return
      result=setup_account(c,body); c.commit(); self.reply(201,result); return
+    if path.startswith('/api/registration/otp/'):
+     if self.command=='POST' and self.headers.get('X-Registration-Request')!='1':raise advanced.ServiceError('Use the registration page',403)
+     peer=self.client_address[0]
+     if peer in ('127.0.0.1','::1') and self.headers.get('X-Forwarded-For'):
+      import ipaddress
+      try:peer=str(ipaddress.ip_address(self.headers['X-Forwarded-For'].split(',')[-1].strip()))
+      except ValueError:pass
+     result=registration_otp.public(path,self.command,body,c,peer);c.commit();self.reply(200,result);return
     if path=='/api/register' and self.command=='POST':
      if self.headers.get('X-Registration-Request')!='1':self.reply(403,{'error':'Use the registration page'});return
      result=register_workspace(c,body);c.commit();self.reply(201,result);return
@@ -282,12 +308,21 @@ class Handler(BaseHTTPRequestHandler):
      if not u or u['account_status']!='active' or not hmac.compare_digest(u['hash'],password(body.get('password',''),u['salt'])): time.sleep(.5); self.reply(401,{'error':'Invalid credentials'}); return
      tenant=c.execute('SELECT status FROM tenants WHERE id=?',(u['tenant_id'],)).fetchone()
      if not tenant or (tenant['status']!='active' and u['role']!='super_admin'):self.reply(403,{'error':'Workspace is suspended'});return
+     self.event_actor=u['id'];self.event_tenant=u['tenant_id']
      token=secrets.token_hex(32); csrf=secrets.token_hex(24); c.execute('DELETE FROM sessions WHERE expires<?',(int(time.time()),)); c.execute('INSERT INTO sessions VALUES(?,?,?,?)',(token,u['id'],int(time.time())+28800,csrf)); self.reply(200,{'csrf':csrf},'session='+token+'; HttpOnly; SameSite=Strict; Path=/'+('; Secure' if os.environ.get('DOBHRAP_SECURE_COOKIE')=='1' else '')); return
     cookies=SimpleCookie(self.headers.get('Cookie','')); token=cookies['session'].value if 'session' in cookies else ''; u=c.execute('SELECT users.*,sessions.csrf FROM users JOIN sessions ON users.id=sessions.user_id WHERE token=? AND expires>?',(token,int(time.time()))).fetchone()
     if not u or u['account_status']!='active':self.reply(401,{'error':'Sign in required'}); return
+    self.event_actor=u['id'];self.event_tenant=u['tenant_id']
     if self.command=='POST' and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),u['csrf']): self.reply(403,{'error':'Invalid CSRF token'}); return
+    if path=='/api/platform/registration-otp':
+     result=registration_otp.admin(c,u,body,self.command);c.commit();self.reply(200,result);return
+    events_result=user_events.dispatch(path,self.command,body,c,u)
+    if events_result is not None:c.commit();self.reply(200,events_result);return
+    if path=='/api/platform/users' and body.get('action') in ('create','edit','delete','suspend','activate'):self.event_name='user.'+body['action']
     management=user_management.dispatch(path,self.command,body,c,u)
-    if management is not None:c.commit();self.reply(200,management);return
+    if management is not None:
+     target=management.get('id',body.get('id',0));self.event_target=target if type(target) is int and 0<=target<9223372036854775807 else 0
+     c.commit();self.reply(200,management);return
     if path=='/api/logout' and self.command=='POST': c.execute('DELETE FROM sessions WHERE token=?',(token,)); self.reply(200,{'ok':True},'session=; Max-Age=0; Path=/'); return
     if path in ('/api/password-reset/admin','/api/password/change') and self.command=='POST':
      result=password_reset.authenticated(c,u,body,admin=path.endswith('/admin'));c.commit();self.reply(200,result);return
@@ -358,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
      if body.get('role')=='super_admin' and (u['role']!='super_admin' or tenant_id!=1):self.reply(403,{'error':'Only the platform super administrator can grant this role in the platform workspace'});return
      email=str(body['email']).strip().lower()
      if '@' not in email or len(email)>254:raise ValueError('Enter a valid email')
-     salt=secrets.token_hex(16);c.execute('INSERT INTO users(email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?)',(email,salt,password(body['password'],salt),body['role'],tenant_id))
+     salt=secrets.token_hex(16);c.execute('INSERT INTO users(id,email,salt,hash,role,tenant_id) VALUES(?,?,?,?,?,?)',(user_data.allocate(c),email,salt,password(body['password'],salt),body['role'],tenant_id))
      c.execute('INSERT INTO audit(user_id,action) VALUES(?,?)',(u['id'],'User created for workspace '+str(tenant_id)));c.commit();self.reply(201,{'ok':True});return
     support_result=support.dispatch(path,self.command,body,c,u,tenant_id)
     if support_result is not None:c.commit();self.reply(200,support_result);return

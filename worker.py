@@ -87,13 +87,15 @@ def execute(connect=app.connect, allow_provider=True):
     return True
 
 def run_all():
+    import user_data
+    user_data.process(app)
     with app.connect() as catalog:
         tenants=[row['id'] for row in catalog.execute("SELECT id FROM tenants WHERE status='active' ORDER BY id")]
     ai_budget=3
     for tenant_id in tenants:
         execute(lambda tid=tenant_id: app.tenant_connect(tid), allow_provider=tenant_id==1)
         with app.connect() as catalog:
-            owners={r['id']:dict(r) for r in catalog.execute("SELECT u.* FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.status='active' AND u.role!='viewer' AND (u.tenant_id=? OR u.role='super_admin')",(tenant_id,))}
+            owners={r['id']:dict(r) for r in catalog.execute("SELECT u.* FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.status='active' AND u.account_status='active' AND u.role!='viewer' AND (u.tenant_id=? OR u.role='super_admin')",(tenant_id,))}
         if ai_budget>0:
             with app.tenant_connect(tenant_id) as private:ai_budget-=app.tax_preparation.process_suggestions(private,owners,ai_budget)
 
