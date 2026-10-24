@@ -11,3 +11,10 @@ Changes revoke the affected user's sessions and invalidate password-reset links.
 The shared `users` table adds `account_status`, `account_revision` and `display_name`; existing users default to active. Database migrations run during normal application startup. `/api/platform/users` supports authenticated GET listing and CSRF-protected POST list/edit/suspend/activate/delete operations. All changes create an audit event containing the acting user, target ID and action. No tenant is moved and balances are not changed by these controls.
 
 Deploy through the existing `ansible/pull-and-deploy.yml` entry point. The full source archive includes `user_management.py` and `user-management.js`; the trusted GUI deployment source is updated as well. Automated backend tests cover privilege checks, session invalidation, reactivation, stale changes, deletion and last-admin protection. A mobile browser test exercises search, editing, suspension and typed-confirmation deletion using a temporary local database.
+
+
+## Manually create registered users
+
+Click **Create user** on All platform users. Enter display name, email, matching initial passwords (14–1024 characters), initial active/suspended status and your own current administrator password. Select an existing active workspace and role, or create a new personal/business workspace. A new business requires its name; the first user in either new-workspace type is its workspace administrator. Platform super administrators can only be added to workspace #1. Duplicate emails and inactive or missing workspaces are rejected.
+
+Creation commits the user and phone/email provisioning records together. Passwords are hashed; phone/mail provisioning uses separate managed passwords and waits for configured provider readiness. Initially suspended users cannot sign in and do not provision externally until reactivated/retried. No welcome email is sent by this feature and no paid calling credit is granted. Provide the initial password privately to the intended user; it is not displayed in account listings. The existing password-change page can then be used by the user.

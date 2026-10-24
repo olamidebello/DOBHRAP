@@ -19,6 +19,7 @@ def dispatch(path,method,body,c,user):
  if actor['role']!='super_admin' or actor['account_status']!='active':raise a.ServiceError('Active super administrator required',403)
  if not isinstance(password,str) or not 14<=len(password)<=1024 or not hmac.compare_digest(actor['hash'],app.password(password,actor['salt'])):
   c.commit();raise a.ServiceError('Confirm your current administrator password',403)
+ if body.get('action')=='create':return create(c,body,user)
  target=c.execute('SELECT * FROM users WHERE id=?',(body.get('id'),)).fetchone()
  if not target:raise a.ServiceError('User not found',404)
  if target['account_revision']!=body.get('revision'):raise a.ServiceError('User changed; reload before saving',409)
@@ -54,4 +55,28 @@ def listing(c,body):
  if state!='all':where+=' AND u.account_status=?';args.append(state)
  total=c.execute('SELECT count(*) FROM users u JOIN tenants t ON t.id=u.tenant_id'+where,args).fetchone()[0]
  rows=c.execute('SELECT u.id,u.email,u.display_name,u.role,u.tenant_id,u.account_status,u.account_revision,t.name AS workspace,t.status AS workspace_status FROM users u JOIN tenants t ON t.id=u.tenant_id'+where+' ORDER BY u.id LIMIT 100 OFFSET ?',args+[page*100]).fetchall()
- return {'users':[dict(r) for r in rows],'total':total,'page':page,'page_size':100}
+ return {'users':[dict(r) for r in rows],'total':total,'page':page,'page_size':100,'workspaces':[dict(r) for r in c.execute('SELECT id,name,status,service_mode FROM tenants ORDER BY id')]}
+
+
+def create(c,body,actor):
+ import app,communications
+ email=str(body.get('email','')).strip().lower();name=str(body.get('display_name','')).strip();password=body.get('password');mode=body.get('workspace_mode','existing');role=body.get('role','viewer');state=body.get('account_status','active')
+ if not re.fullmatch(r'[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+',email) or len(email)>254 or len(name)>150:raise a.ServiceError('Enter a valid email and name up to 150 characters')
+ if not isinstance(password,str) or not 14<=len(password)<=1024 or password!=body.get('password_confirmation'):raise a.ServiceError('Use matching initial passwords of 14 to 1024 characters')
+ if mode not in ('existing','personal','business') or role not in ('viewer','editor','admin','super_admin') or state not in ('active','suspended'):raise a.ServiceError('Choose a valid workspace, role and account status')
+ if c.execute('SELECT id FROM users WHERE lower(email)=?',(email,)).fetchone():raise a.ServiceError('An account already uses that email',409)
+ if mode=='existing':
+  tenant=c.execute('SELECT * FROM tenants WHERE id=?',(body.get('tenant_id'),)).fetchone()
+  if not tenant or tenant['status']!='active':raise a.ServiceError('Select an active workspace')
+  if role=='super_admin' and tenant['id']!=1:raise a.ServiceError('Super administrators belong to the platform workspace')
+  tid=tenant['id'];salt=secrets.token_hex(16)
+  uid=c.execute('INSERT INTO users(email,salt,hash,role,tenant_id,display_name,account_status) VALUES(?,?,?,?,?,?,?)',(email,salt,app.password(password,salt),role,tid,name,state)).lastrowid
+  communications.enqueue(c,uid,tid,tenant['service_mode'])
+ else:
+  if role!='admin':raise a.ServiceError('The first account in a new workspace must be its administrator')
+  tid=app.register_workspace(c,{'account_type':mode,'company':body.get('company',''),'email':email,'password':password,'confirm_password':password},transaction_started=True)['tenant_id']
+  uid=c.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()[0]
+  c.execute('UPDATE users SET display_name=?,account_status=? WHERE id=?',(name,state,uid))
+ if state=='suspended':c.execute("UPDATE communications_accounts SET state='suspended' WHERE owner=?",(uid,))
+ a.audit(c,actor['id'],'Registered user created id '+str(uid)+' workspace '+str(tid))
+ return {'ok':True,'id':uid,'tenant_id':tid,'notice':'User created. Phone/email provisioning follows configured service readiness; no paid calling or welcome message was sent.'}

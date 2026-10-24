@@ -83,8 +83,8 @@ def tenant_connect(tenant_id):
  if not database.mysql_enabled() and not path.exists(): raise advanced.ServiceError('Workspace database unavailable',503)
  return database.connect(path,tenant_id=tenant_id)
 
-def register_workspace(c,body):
- c.execute('BEGIN IMMEDIATE')
+def register_workspace(c,body,transaction_started=False):
+ if not transaction_started:c.execute('BEGIN IMMEDIATE')
  if not c.execute('SELECT 1 FROM users').fetchone(): raise advanced.ServiceError('Complete platform setup first',409)
  mode=body.get('service_mode','business')
  account_type=body.get('account_type')

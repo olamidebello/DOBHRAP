@@ -32,3 +32,29 @@ class UserManagementTests(unittest.TestCase):
   root=next(x for x in self.request('/api/platform/users',client=self.root)['users'] if x['role']=='super_admin')
   for action,extra in [('suspend',{}),('delete',{'confirm_email':root['email']}),('edit',{'email':root['email'],'role':'viewer'})]:
    with self.assertRaises(HTTPError):self.change(root,action,**extra)
+ def test_manual_create_existing_workspace_password_and_queued_services(self):
+  self.root,self.token=self.login('platform@example.com','platform-password-1234')
+  body={'action':'create','confirm_password':'platform-password-1234','workspace_mode':'existing','tenant_id':1,'display_name':'Manual user','email':'manual@example.com','role':'viewer','password':'manual-password-12345','password_confirmation':'manual-password-12345','account_status':'active'}
+  result=self.request('/api/platform/users',body,self.root,self.token);client,csrf=self.login('manual@example.com','manual-password-12345');self.assertEqual(self.request('/api/me',client=client)['role'],'viewer')
+  with app.connect() as c:
+   u=c.execute('SELECT * FROM users WHERE id=?',(result['id'],)).fetchone();self.assertNotEqual(u['hash'],body['password']);self.assertEqual(c.execute('SELECT count(*) FROM communications_accounts WHERE owner=?',(u['id'],)).fetchone()[0],2)
+  with self.assertRaises(HTTPError) as e:self.request('/api/platform/users',body,self.root,self.token)
+  self.assertEqual(e.exception.code,409)
+ def test_manual_create_new_workspace_and_reject_unsafe_roles(self):
+  self.root,self.token=self.login('platform@example.com','platform-password-1234')
+  for kind in ('personal','business'):
+   body={'action':'create','confirm_password':'platform-password-1234','workspace_mode':kind,'company':'New company','email':kind+'-manual@example.com','role':'admin','password':'manual-password-12345','password_confirmation':'manual-password-12345','account_status':'suspended'}
+   r=self.request('/api/platform/users',body,self.root,self.token)
+   with app.connect() as c:
+    self.assertEqual(c.execute('SELECT service_mode FROM tenants WHERE id=?',(r['tenant_id'],)).fetchone()[0],'tax_only' if kind=='personal' else 'business');self.assertEqual(c.execute('SELECT account_status FROM users WHERE id=?',(r['id'],)).fetchone()[0],'suspended')
+   with self.assertRaises(HTTPError):self.login(body['email'],body['password'])
+  body.update(email='bad-role@example.com',role='super_admin')
+  with self.assertRaises(HTTPError):self.request('/api/platform/users',body,self.root,self.token)
+  body.update(workspace_mode='existing',tenant_id=r['tenant_id'])
+  with self.assertRaises(HTTPError):self.request('/api/platform/users',body,self.root,self.token)
+ def test_manual_creation_rejects_wrong_admin_and_password_mismatch(self):
+  self.root,self.token=self.login('platform@example.com','platform-password-1234')
+  body={'action':'create','confirm_password':'wrong','workspace_mode':'existing','tenant_id':1,'email':'invalid-create@example.com','role':'viewer','password':'manual-password-12345','password_confirmation':'different'}
+  for confirm in ('wrong','platform-password-1234'):
+   with self.assertRaises(HTTPError):self.request('/api/platform/users',dict(body,confirm_password=confirm),self.root,self.token)
+  with app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM users').fetchone()[0],1)
