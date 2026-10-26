@@ -1,0 +1,35 @@
+---
+- name: Require existing business data before rebuilding
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require execution on the business host
+      ansible.builtin.assert:
+        that: ansible_connection == 'local'
+    - name: Inspect existing business database and encryption key
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: [/var/lib/dobhrap/dobhrap.db, /etc/dobhrap-encryption.key]
+      register: existing_business
+      no_log: true
+    - name: Stop if existing data or key is missing
+      ansible.builtin.assert:
+        that: item.stat.exists and item.stat.isreg and item.stat.size > 0
+        fail_msg: Existing database or encryption key missing. Restore the migrated business data before running hard repair.
+      loop: '{{ existing_business.results }}'
+      no_log: true
+- import_playbook: repair-oob.yml
+- name: Repair listener precedence and verify actual browser HTML
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply exact-host routing with backups and rollback
+      ansible.builtin.command:
+        argv: [python3, '{{ playbook_dir }}/hardfix-routing.py']
+      register: hardfix
+      changed_when: true
+    - name: Show verified result
+      ansible.builtin.debug:
+        msg: '{{ hardfix.stdout | from_json }}'
