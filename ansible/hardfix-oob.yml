@@ -20,6 +20,8 @@
       loop: '{{ existing_business.results }}'
       no_log: true
 - import_playbook: repair-oob.yml
+  vars:
+    oob_hardfix: true
 - name: Repair listener precedence and verify actual browser HTML
   hosts: dobhrap
   become: true

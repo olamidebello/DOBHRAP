@@ -556,9 +556,15 @@
         startup_probe.rc != 0 or
         startup_probe.stdout_lines[-1] != item.status or
         item.field not in (startup_probe.stdout_lines[:-1] | join('\n') | from_json)
+    - name: Repair exact-host listener precedence before public verification
+      ansible.builtin.command:
+        argv: [python3, "{{ playbook_dir }}/hardfix-routing.py"]
+      when: oob_hardfix | default(false) | bool
+      changed_when: true
     - name: Verify public database-backed startup API
       ansible.builtin.uri:
         url: "https://{{ domain }}/api/setup/status"
+        use_proxy: false
         status_code: 200
         return_content: true
       register: public_startup
@@ -583,6 +589,7 @@
     - name: Verify public HTTPS serves the business suite
       ansible.builtin.uri:
         url: "https://{{ domain }}/"
+        use_proxy: false
         return_content: true
         status_code: 200
       register: public_page
@@ -592,6 +599,7 @@
     - name: Verify public branding asset
       ansible.builtin.uri:
         url: "https://{{ domain }}/assets/oob-logo.png"
+        use_proxy: false
         status_code: 200
       register: public_logo
       failed_when: public_logo.status != 200 or public_logo.content_type != 'image/png'
@@ -665,6 +673,7 @@
     - name: Verify public API reaches this application
       ansible.builtin.uri:
         url: "https://{{ domain }}/api/identity"
+        use_proxy: false
         status_code: 200
       register: public_identity
       failed_when: (public_identity.json.application | default('')) != 'oob-business-suite'
