@@ -1,0 +1,69 @@
+---
+- import_playbook: repair-oob.yml
+  vars:
+    oob_hardfix: true
+- name: Enable owner-approved SAM alerts and check contracting resources
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install restricted opportunity search worker
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-contracting.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=OOB opted-in SAM.gov opportunity alerts
+          After=network.target
+          [Service]
+          Type=oneshot
+          User=dobhrap-app
+          Group=dobhrap-app
+          WorkingDirectory=/opt/dobhrap/current
+          EnvironmentFile=/etc/dobhrap.env
+          ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/contracting_worker.py
+          TimeoutStartSec=180
+          NoNewPrivileges=true
+          ProtectHome=true
+          ProtectSystem=strict
+          PrivateTmp=true
+          ReadWritePaths=/var/lib/dobhrap
+          UMask=0077
+    - name: Install recurring event processor
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-contracting.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Process due opted-in contracting searches
+          [Timer]
+          OnBootSec=120s
+          OnUnitInactiveSec=60s
+          Unit=oob-contracting.service
+          [Install]
+          WantedBy=timers.target
+    - name: Verify event service and timer
+      ansible.builtin.command:
+        argv: [systemd-analyze, verify, /etc/systemd/system/oob-contracting.service, /etc/systemd/system/oob-contracting.timer]
+      changed_when: false
+    - name: Enable scheduled opportunity checks
+      ansible.builtin.systemd:
+        name: oob-contracting.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Verify public contracting GUI
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/contracting.js
+        use_proxy: false
+        status_code: 200
+        return_content: true
+      register: contracting_gui
+      failed_when: "'contracting/generate' not in contracting_gui.content"
+    - name: Report activation steps
+      ansible.builtin.debug:
+        msg:
+          - Open Business development -> Contracting opportunities. Save your workspace business profile and opt in to matching alerts.
+          - Super admin configures the SAM.gov-issued API key and SAM search policy, plus the existing AI provider/model/rates. Existing keys are reused.
+          - Searches are bounded to three due watches per run and one attempt per owner/workspace per hour. Provider quotas and platform caps apply. Alerts are in-app.
+          - Bids stay drafts until reviewed and approved. External submission follows the current notice and is recorded only as user-reported with a receipt.

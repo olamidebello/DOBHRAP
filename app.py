@@ -9,6 +9,7 @@ import password_reset
 import marketplace
 import ai_services
 import communications
+import contracting
 import business_contracts
 import user_management
 import user_data
@@ -138,6 +139,7 @@ def init():
   ai_services.initialize(c)
   communications.initialize(c)
   business_contracts.initialize(c)
+  contracting.initialize(c)
   user_management.initialize(c)
   user_events.initialize(c)
   registration_otp.initialize(c)
@@ -240,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/contracting.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -373,6 +375,8 @@ class Handler(BaseHTTPRequestHandler):
     if tenant['status']!='active':self.reply(403,{'error':'Workspace is suspended'});return
     cashout_result=cashout.dispatch(path,self.command,body,c,u)
     if cashout_result is not None:c.commit();self.reply(200,cashout_result);return
+    contracting_result=contracting.dispatch(path,self.command,body,c,u,tenant_id)
+    if contracting_result is not None:c.commit();self.reply(200,contracting_result);return
     business_result=business_contracts.dispatch(path,self.command,body,c,u,tenant_id)
     if business_result is not None:c.commit();self.reply(200,business_result);return
     comms_result=communications.dispatch(path,self.command,body,c,u,tenant_id)
