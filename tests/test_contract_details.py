@@ -94,3 +94,17 @@ class DetailsTests(unittest.TestCase):
   with app.connect() as c:c.execute('INSERT INTO contracting_details VALUES(?,?,?,?,?)',(tid,'a'*32,'ready',a.seal(data),1))
   with self.assertRaises(HTTPError) as error:self.request('/api/contracting/details-quote',{'notice_id':'a'*32},client,csrf)
   self.assertEqual(error.exception.code,409)
+ def test_delivery_profile_context_is_richer_bounded_and_private(self):
+  tid,user,client,csrf=self.account()
+  profile={key:'x'*10000 for key in d.PROFILE_LIMITS}
+  profile.update(capabilities='x'*700+'Evidence of delivery equipment',insurance='Bonding evidence supplied',ein='private-ein-123',contact_email='private-contact@example.com',contact_phone='private-phone')
+  data={'notice':{'title':'Delivery contract'},'description':'Requirements '*900,'attachments':[],'attachment_count':0,'coverage_complete':True}
+  with app.connect() as c:
+   c.execute('INSERT INTO business_profiles VALUES(?,?,?,?)',(tid,1,a.seal(profile),1))
+   c.execute('INSERT INTO contracting_details VALUES(?,?,?,?,?)',(tid,'a'*32,'ready',a.seal(data),1))
+   _,prompts=d.chunks(c,tid,'a'*32)
+  for prompt in prompts:
+   self.assertLessEqual(len(prompt.encode()),16000)
+   self.assertIn('Evidence of delivery equipment',prompt)
+   self.assertIn('Bonding evidence supplied',prompt)
+   for private in ('private-ein-123','private-contact@example.com','private-phone'):self.assertNotIn(private,prompt)
