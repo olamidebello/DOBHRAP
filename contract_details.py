@@ -151,7 +151,7 @@ def dispatch(route,body,c,user,tid):
    return {'state':'queued'}
   if not row:
    c.execute('INSERT INTO contracting_details VALUES(?,?,?,?,?)',(tid,nid,'queued',a.seal({'notice':a.unseal(opp['payload'])}),int(time.time())))
-   return {'state':'queued','notice':'Retrieval queued. Refresh in about one minute.'}
+   return {'state':'queued','progress':{'stage':'queued','message':'Waiting for the document worker','completed':0,'total':0}}
   data=a.unseal(row['payload']);report=c.execute('SELECT payload FROM contracting_reports WHERE owner=? AND tenant_id=? AND notice_id=?',(user['id'],tid,nid)).fetchone()
   return {'state':row['state'],'updated':row['updated'],**data,'report':a.unseal(report[0]) if report else {}}
  data,prompts=chunks(c,tid,nid)
@@ -191,7 +191,11 @@ def process(app):
   tid,nid=job['tenant_id'],job['notice_id']
   if c.execute("UPDATE contracting_details SET state='working',updated=? WHERE tenant_id=? AND notice_id=? AND updated=?",(int(time.time()),tid,nid,job['updated'])).rowcount!=1:return
   c.commit();data=a.unseal(job['payload'])
+  def progress(stage,message,completed=0,total=0):
+   payload={'notice':a.unseal(job['payload'])['notice'],'progress':{'stage':stage,'message':message,'completed':completed,'total':total}}
+   c.execute('UPDATE contracting_details SET payload=?,updated=? WHERE tenant_id=? AND notice_id=?',(a.seal(payload),int(time.time()),tid,nid));c.commit()
   try:
+   progress('notice','Retrieving current SAM.gov notice')
    policy=c.execute('SELECT enabled,daily_limit FROM business_sam_policy WHERE id=1').fetchone();key=settings.get('SAM_API_KEY')
    if not policy['enabled'] or not key:raise ValueError('SAM policy disabled or key missing')
    day=dt.date.today().isoformat();c.execute('BEGIN IMMEDIATE');c.execute('INSERT OR IGNORE INTO business_sam_usage VALUES(?,0)',(day,))
@@ -204,6 +208,7 @@ def process(app):
    if not rows or str(rows[0].get('noticeId'))!=nid:raise ValueError('Notice not returned by SAM')
    notice=rows[0];data['notice']=notice;data['attachments']=[];data['warnings']=[]
    # Never persist authentication-bearing URLs.
+   progress('description','Retrieving solicitation description')
    description=notice.pop('description','')
    if description:
     try:
@@ -218,7 +223,9 @@ def process(app):
    links=notice.pop('resourceLinks',[]) or []
    if len(links)>25:data['warnings'].append('Only first 25 attachments processed; remaining require manual review')
    total=0;started=time.monotonic()
+   progress('attachments','Preparing attachment downloads',0,len(links[:25]))
    for index,url in enumerate(links[:25]):
+    progress('download','Downloading attachment '+str(index+1)+' of '+str(len(links[:25])),index,len(links[:25]))
     item={'name':'Attachment '+str(index+1),'url':'','text':'','notes':[],'complete':False}
     try:
      if time.monotonic()-started>360 or total>=40*1024*1024:raise ValueError('Combined processing budget exceeded')
@@ -228,14 +235,17 @@ def process(app):
      if total>40*1024*1024:raise ValueError('Combined attachment budget exceeded')
      match=re.search(r'filename="?([^";]+)',disposition)
      item['name']=Path(match.group(1) if match else urlsplit(url).path.rsplit('/',1)[-1]).name[:200] or item['name']
+     progress('extraction','Extracting text / OCR: '+item['name'],index,len(links[:25]))
      item.update(extract(raw,item['name'],mime));item['sha256']=hashlib.sha256(raw).hexdigest();item['bytes']=len(raw)
     except Exception:item['notes']=['Unavailable, restricted, unsupported or exceeds processing budget; review original manually']
     data['attachments'].append(item)
    data['notice'].pop('links',None);data['notice'].pop('uiLink',None)
+   progress('organizing','Organizing notice and extracted sources',len(links[:25]),len(links[:25]))
+   data['progress']={'stage':'ready','message':'Details ready — review source coverage warnings','completed':len(links[:25]),'total':len(links[:25])}
    data['coverage_complete']=not data['warnings'] and all(x['complete'] for x in data['attachments'])
    state='ready'
   except Exception:
-   c.rollback();data={'notice':a.unseal(job['payload'])['notice'],'error':'Retrieval failed. Check SAM key/policy, source access and quota.','warnings':['No complete source review available']};state='failed'
+   c.rollback();data={'notice':a.unseal(job['payload'])['notice'],'error':'Retrieval failed. Check SAM key/policy, source access and quota.','warnings':['No complete source review available'],'progress':{'stage':'failed','message':'Retrieval stopped — review source access and retry'}};state='failed'
   c.execute('UPDATE contracting_details SET state=?,payload=?,updated=? WHERE tenant_id=? AND notice_id=?',(state,a.seal(data),int(time.time()),tid,nid))
 
 if __name__=='__main__' and len(sys.argv)>1 and sys.argv[1]=='--extract':

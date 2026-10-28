@@ -56,3 +56,21 @@ class DetailsTests(unittest.TestCase):
   raw=json.dumps({'opportunitiesData':[{'noticeId':'a'*32,'title':'Support','resourceLinks':['https://sam.gov/test.exe']}]}).encode()
   with patch.object(d.settings,'get',return_value='fake'),patch.object(d,'fetch',side_effect=[(raw,'application/json',''),ValueError('unavailable')]):d.process(app)
   r=self.request('/api/contracting/details',{'notice_id':'a'*32},client,csrf);self.assertEqual(r['state'],'ready');self.assertFalse(r['coverage_complete']);self.assertTrue(r['attachments'][0]['notes'])
+
+ def test_worker_commits_real_progress_stages(self):
+  tid,user,client,csrf=self.account();self.request('/api/contracting/details',{'notice_id':'a'*32},client,csrf)
+  with app.connect() as c:c.execute('UPDATE business_sam_policy SET enabled=1')
+  stages=[]
+  def stage():
+   with app.connect() as c:
+    payload=c.execute('SELECT payload FROM contracting_details WHERE tenant_id=?',(tid,)).fetchone()[0]
+    stages.append(a.unseal(payload)['progress']['stage'])
+  raw=json.dumps({'opportunitiesData':[{'noticeId':'a'*32,'title':'Support','resourceLinks':['https://sam.gov/scope.txt']}]}).encode()
+  def fetch(url,*args):
+   stage();return (raw,'application/json','') if '/search?' in url else (b'Support required','text/plain','filename="scope.txt"')
+  def extract(*args):
+   stage();return {'text':'Support required','notes':[],'complete':True}
+  with patch.object(d.settings,'get',return_value='fake'),patch.object(d,'fetch',side_effect=fetch),patch.object(d,'extract',side_effect=extract):d.process(app)
+  self.assertEqual(stages,['notice','download','extraction'])
+  r=self.request('/api/contracting/details',{'notice_id':'a'*32},client,csrf)
+  self.assertEqual(r['progress']['stage'],'ready');self.assertEqual(r['progress']['completed'],1)
