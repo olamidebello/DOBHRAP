@@ -116,7 +116,7 @@ def dispatch(path,method,body,c,user,tid):
    a.audit(c,user['id'],'SAM.gov access policy changed')
   state=dict(c.execute('SELECT * FROM business_sam_policy WHERE id=1').fetchone());state['enabled']=bool(state['enabled']);state['key_configured']=bool(settings.get('SAM_API_KEY'));state['usage']=[dict(r) for r in c.execute('SELECT * FROM business_sam_usage ORDER BY day DESC LIMIT 30')];state['checks']=[dict(r) for r in c.execute("SELECT provider,ok,checked,message FROM provider_checks WHERE provider='sam'")];return state
  tenant=c.execute('SELECT service_mode,name FROM tenants WHERE id=?',(tid,)).fetchone()
- if not tenant or tenant['service_mode']!='business':raise a.ServiceError('Business workspace required',403)
+ if not tenant or tenant['service_mode'] not in ('business','contracts_only'):raise a.ServiceError('Business workspace required',403)
  route=path.rsplit('/',1)[-1];p,revision=profile(c,tid)
  if route=='profile':
   if method=='POST':

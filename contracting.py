@@ -4,11 +4,13 @@ import advanced as a
 import business_contracts as business
 import ai_services
 import contract_details
+import contract_partners
 
 FILTERS={'title','naics','from','to','offset','organization','psc','state','zip','set_aside','solicitation','notice_type','due_from','due_to','keyword_mode'}
 
 def initialize(c):
  contract_details.initialize(c)
+ contract_partners.initialize(c)
  c.execute('CREATE TABLE IF NOT EXISTS contracting_watches(owner INTEGER NOT NULL,tenant_id INTEGER NOT NULL,enabled INTEGER NOT NULL,payload TEXT NOT NULL,last_attempt INTEGER NOT NULL DEFAULT 0,last_success INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT \'\',PRIMARY KEY(owner,tenant_id))')
  c.execute('CREATE TABLE IF NOT EXISTS contracting_alerts(id TEXT PRIMARY KEY,owner INTEGER NOT NULL,tenant_id INTEGER NOT NULL,notice_id TEXT NOT NULL,digest TEXT NOT NULL,payload TEXT NOT NULL,seen INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,UNIQUE(owner,tenant_id,notice_id,digest))')
  c.execute('CREATE TABLE IF NOT EXISTS contracting_approvals(proposal_id TEXT PRIMARY KEY,tenant_id INTEGER NOT NULL,owner INTEGER NOT NULL,digest TEXT NOT NULL,approved INTEGER NOT NULL,receipt TEXT NOT NULL DEFAULT \'\',submitted INTEGER NOT NULL DEFAULT 0)')
@@ -40,7 +42,7 @@ def prompt(c,tid,body,user):
 def dispatch(path,method,body,c,user,tid):
  if not path.startswith('/api/contracting/'):return None
  tenant=c.execute('SELECT service_mode,status FROM tenants WHERE id=?',(tid,)).fetchone()
- if not tenant or tenant['service_mode']!='business' or tenant['status']!='active':raise a.ServiceError('Active business workspace required',403)
+ if not tenant or tenant['service_mode'] not in ('business','contracts_only') or tenant['status']!='active':raise a.ServiceError('Active business workspace required',403)
  owner=user['id'];route=path.rsplit('/',1)[-1]
  if route=='status' and method=='GET':
   watch=c.execute('SELECT * FROM contracting_watches WHERE owner=? AND tenant_id=?',(owner,tid)).fetchone()
@@ -48,6 +50,7 @@ def dispatch(path,method,body,c,user,tid):
   submissions=[{'proposal_id':r['proposal_id'],'approved_at':r['approved'],'submitted_at':r['submitted'],'receipt':a.unseal(r['receipt'])['reference'] if r['receipt'] else ''} for r in c.execute('SELECT * FROM contracting_approvals WHERE owner=? AND tenant_id=?',(owner,tid))]
   return {'watch':dict(enabled=bool(watch['enabled']),filters=a.unseal(watch['payload']),last_attempt=watch['last_attempt'],last_success=watch['last_success'],error=watch['error']) if watch else {'enabled':False,'filters':{}},'alerts':alerts,'submissions':submissions,'notice':'In-app alerts, checked hourly while enabled. Matching uses the workspace business profile and saved filters, first 25 source results per check. No eligibility determination.'}
  if method!='POST':raise a.ServiceError('POST required',405)
+ if route.startswith('partners-'):return contract_partners.dispatch(route,method,body,c,user,tid)
  if user['role']=='viewer':raise a.ServiceError('Read-only workspace access',403)
  if route in ('details','details-quote','details-analyze','details-draft'):return contract_details.dispatch(route,body,c,user,tid)
  if route=='watch':
@@ -88,7 +91,7 @@ def dispatch(path,method,body,c,user,tid):
 
 def process(app,limit=3):
  with app.connect() as c:
-  watches=[dict(r) for r in c.execute("SELECT w.* FROM contracting_watches w JOIN users u ON u.id=w.owner JOIN tenants t ON t.id=w.tenant_id WHERE w.enabled=1 AND w.last_attempt<? AND u.account_status='active' AND u.role!='viewer' AND (u.tenant_id=w.tenant_id OR u.role='super_admin') AND t.status='active' AND t.service_mode='business' ORDER BY w.last_attempt LIMIT ?",(int(time.time())-3600,limit))]
+  watches=[dict(r) for r in c.execute("SELECT w.* FROM contracting_watches w JOIN users u ON u.id=w.owner JOIN tenants t ON t.id=w.tenant_id WHERE w.enabled=1 AND w.last_attempt<? AND u.account_status='active' AND u.role!='viewer' AND (u.tenant_id=w.tenant_id OR u.role='super_admin') AND t.status='active' AND t.service_mode IN ('business','contracts_only') ORDER BY w.last_attempt LIMIT ?",(int(time.time())-3600,limit))]
  for w in watches:
   with app.connect() as c:
    now=int(time.time())

@@ -94,12 +94,12 @@ def register_workspace(c,body,transaction_started=False):
  mode=body.get('service_mode','business')
  account_type=body.get('account_type')
  if account_type is not None:
-  if account_type not in ('personal','business'):raise ValueError('Choose Personal or Business account type')
-  expected='tax_only' if account_type=='personal' else 'business'
+  if account_type not in ('personal','business','government_contracts'):raise ValueError('Choose Personal, Business or Government contracts account type')
+  expected='tax_only' if account_type=='personal' else 'contracts_only' if account_type=='government_contracts' else 'business'
   if 'service_mode' in body and mode!=expected:raise ValueError('Account type does not match requested services')
   mode=expected
- if mode not in ('business','tax_only'):raise ValueError('Invalid account type')
- company='Personal tax account' if mode=='tax_only' else str(body.get('company','')).strip();email=str(body.get('email','')).strip().lower();p=str(body.get('password',''))
+ if mode not in ('business','tax_only','contracts_only'):raise ValueError('Invalid account type')
+ company='Personal tax account' if mode=='tax_only' else 'Government contracting account' if mode=='contracts_only' else str(body.get('company','')).strip();email=str(body.get('email','')).strip().lower();p=str(body.get('password',''))
  if not company or len(company)>150:raise ValueError('Business name is required (maximum 150 characters)')
  if len(email)>254 or '@' not in email or any(x.isspace() for x in email):raise ValueError('Enter a valid email')
  if not 14<=len(p)<=1024 or p!=body.get('confirm_password'):raise ValueError('Use matching passwords of 14 to 1024 characters')
@@ -118,7 +118,7 @@ def register_workspace(c,body,transaction_started=False):
  if verified_phone:
   c.execute('INSERT OR REPLACE INTO platform_user_profiles VALUES(?,?)',(uid,advanced.seal({'phone':verified_phone,'phone_verified':True})))
   c.execute('UPDATE registration_otp_challenges SET user_id=? WHERE ticket_hash=?',(uid,hashlib.sha256(body['otp_ticket'].encode()).hexdigest()))
- communications.enqueue(c,uid,tid,mode)
+ if mode!='contracts_only':communications.enqueue(c,uid,tid,mode)
  c.execute('INSERT INTO audit(user_id,action) VALUES(0,?)',('Workspace registered '+str(tid),))
  return {'ok':True,'tenant_id':tid}
 
@@ -238,11 +238,11 @@ class Handler(BaseHTTPRequestHandler):
   try:
    if self.command!='GET' and maintenance_active():raise advanced.ServiceError('Database migration in progress. Please try again shortly.',503)
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock','/forgot-password','/reset-password'):
+   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/government-contracts','/government-contracts/','/contracting-opportunities','/contracting-opportunities/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock','/forgot-password','/reset-password'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com https://cdn.jsdelivr.net; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/contracting.js','/contract-details.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/contracting.js','/contract-details.js','/contract-partners.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -270,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
     c=stack.enter_context(connect())
     if path=='/api/employee-clock' and self.command=='POST':
      tid=int(body.get('tenant_id',0));tenant=c.execute('SELECT * FROM tenants WHERE id=?',(tid,)).fetchone()
-     if not tenant or tenant['status']!='active' or tenant['service_mode']=='tax_only':raise advanced.ServiceError('Employee portal unavailable',403)
+     if not tenant or tenant['status']!='active' or tenant['service_mode']!='business':raise advanced.ServiceError('Employee portal unavailable',403)
      private=stack.enter_context(tenant_connect(tid));cookies=SimpleCookie(self.headers.get('Cookie',''));token=cookies['employee_session'].value if 'employee_session' in cookies else ''
      enabled=bool(c.execute('SELECT enabled FROM clock_platform WHERE id=1').fetchone()[0])
      result=attendance.employee(private,{**body,'_employee_header':self.headers.get('X-Employee-Request')},token,self.headers.get('X-Employee-CSRF',''),hashlib.sha256(self.client_address[0].encode()).hexdigest(),enabled)
@@ -315,6 +315,10 @@ class Handler(BaseHTTPRequestHandler):
     cookies=SimpleCookie(self.headers.get('Cookie','')); token=cookies['session'].value if 'session' in cookies else ''; u=c.execute('SELECT users.*,sessions.csrf FROM users JOIN sessions ON users.id=sessions.user_id WHERE token=? AND expires>?',(token,int(time.time()))).fetchone()
     if not u or u['account_status']!='active':self.reply(401,{'error':'Sign in required'}); return
     self.event_actor=u['id'];self.event_tenant=u['tenant_id']
+    account_tenant=c.execute('SELECT service_mode FROM tenants WHERE id=?',(u['tenant_id'],)).fetchone()
+    if account_tenant and account_tenant['service_mode']=='contracts_only' and u['role']!='super_admin':
+     contract_routes={'/api/me','/api/logout','/api/password/change','/api/wallet/status','/api/intl/catalog','/api/intl/bundle','/api/intl/preferences','/api/intl/rates','/api/platform/user-event','/api/business/profile','/api/business/opportunities','/api/business/proposals','/api/business/proposal-create','/api/business/proposal-save','/api/business/proposal-prompt','/api/business/proposal-delete'}
+     if path not in contract_routes and not path.startswith('/api/contracting/'):raise advanced.ServiceError('This account provides government contracting access only',403)
     if self.command=='POST' and not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),u['csrf']): self.reply(403,{'error':'Invalid CSRF token'}); return
     if path=='/api/platform/registration-otp':
      result=registration_otp.admin(c,u,body,self.command);c.commit();self.reply(200,result);return
@@ -389,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
     marketplace.refresh_subscriptions(c)
     tax_services.enforce(c,path,self.command,body,tenant,u)
     if path=='/api/tax-services/status' and self.command=='GET':self.reply(200,tax_services.status(c,tenant_id,u));return
-    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':{} if tenant['service_mode']=='tax_only' and u['role']!='super_admin' else MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return
+    if path=='/api/me': self.reply(200,{'id':u['id'],'email':u['email'],'role':u['role'],'csrf':u['csrf'],'modules':{} if tenant['service_mode'] in ('tax_only','contracts_only') and u['role']!='super_admin' else MODULES,'tenant':dict(tenant),'preferences':international.preferences(c,u['id'])}); return
     if path=='/api/users':
      if u['role'] not in ('admin','super_admin'):self.reply(403,{'error':'Administrator required'});return
      if self.command=='GET':self.reply(200,[dict(row) for row in c.execute('SELECT id,email,role FROM users WHERE tenant_id=? ORDER BY id',(tenant_id,))]);return

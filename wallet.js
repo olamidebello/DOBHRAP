@@ -6,6 +6,7 @@ async function refreshWalletBadge(){
 async function showWallet(){
  const state=await api('wallet/status');
  content.innerHTML='<section><h2>Account balance</h2><div class="grid">'+state.balances.map(b=>'<article class="card"><h3>'+esc(b.currency)+'</h3><strong>'+esc(formatMoneyMinor(b.balance,b.currency))+'</strong></article>').join('')+'</div><p>'+esc(state.notice)+'</p><button data-go="cashout">Cash out</button><button data-go="marketplace">Shop with account balance</button>'+(userRole==='super_admin'?'<button data-go="wallet_admin">Credit user accounts</button>':'')+'</section><section><h3>Balance activity</h3><div class="table-scroll">'+table(state.entries.map(e=>({...e,amount:formatMoneyMinor(e.amount,e.currency),created:localizedDate(e.created*1000)})),['created','kind','amount','currency','reason','order_id'])+'</div></section>';
+ if(contractsOnlyAccount){content.querySelectorAll('[data-go="cashout"],[data-go="marketplace"]').forEach(b=>b.remove());const note=document.createElement('p');note.textContent='This balance pays for contract analysis and proposal generation. Contact the platform administrator to add credit.';content.querySelector('section').append(note)}
  goButtons();await refreshWalletBadge();
 }
 async function showWalletAdmin(){

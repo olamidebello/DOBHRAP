@@ -1,10 +1,10 @@
 // Navigation and dashboard use the authenticated workspace APIs.
 async function safeRun(fn){try{return await fn()}catch(error){message(error.message)}}
-let currentUserId=0,currentTenantId=1,pageTrail=[],taxOnlyAccount=false;
+let currentUserId=0,currentTenantId=1,pageTrail=[],taxOnlyAccount=false,contractsOnlyAccount=false;
 const navGroups=[
  ['Overview',['dashboard','capabilities']],
  ['Platform',['registration_otp','user_events','platform_users','sam_admin','cashout_admin','wallet_admin','tax_analyst_admin','platform_attendance','super_admin','tenants','watchdog','deployment','provider_keys','coupons']],
- ['Business development',['business_contracts','contracting_opportunities']],
+ ['Business development',['business_contracts','contracting_opportunities','contract_partners']],
  ['Phone & PBX',['communications']],
  ['Marketplace',['ai_chat','cashout','wallet','marketplace','market_orders','market_services']],
  ['Commerce administration',['commerce_admin','market_admin','subscription_plans','subscriptions_admin','payment_gateways','store_admin']],
@@ -16,19 +16,21 @@ const navGroups=[
  ['Automation',['tasks','recurring','approvals','jobs']],
  ['Administration',['users','integrations','locale_settings','user_manual','support_center','downloads','help']]
 ];
-const navLabels={registration_otp:'Registration OTP & Twilio',user_events:'User activity & security log',platform_users:'All platform users',sam_admin:'SAM.gov provisioning & controls',contracting_opportunities:'Contracting opportunities',business_contracts:'Business profile & contracts',communications:'Phone, PBX & system email',ai_chat:'Writing assistant',cashout:'Cash out',cashout_admin:'Cash-out management',wallet:'Account balance',wallet_admin:'User balances & manual credits',tax_analyst_admin:'Tax analyst management',tax_filing:'Federal return workspaces',attendance:"Employee clock & payroll statements",platform_attendance:"Workforce platform controls",commerce_admin:'Commerce dashboard',subscription_plans:'Subscription plans',subscriptions_admin:'Subscription management',payment_gateways:'Payment gateways',store_admin:'Store settings',coupons:'Coupon management',tax_amendments:'Amended tax preparation',tax_services:'Tax services & payment',tax_analyst:'Tax analyst',tax_preparation:'Tax preparation',tax_return_2026:'Tax returns — current & prior years',locale_settings:'Language & currency',provider_keys:'Provider provisioning & keys',user_manual:'User manual',support_center:'Support center & tickets',marketplace:'Service marketplace',market_orders:'Marketplace orders',market_services:'Purchased services',market_admin:'Marketplace administration',dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',watchdog:'Watchdog events & reports',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
+const navLabels={registration_otp:'Registration OTP & Twilio',user_events:'User activity & security log',platform_users:'All platform users',sam_admin:'SAM.gov provisioning & controls',contract_partners:'Bid partners & networking',contracting_opportunities:'Contracting opportunities',business_contracts:'Business profile & contracts',communications:'Phone, PBX & system email',ai_chat:'Writing assistant',cashout:'Cash out',cashout_admin:'Cash-out management',wallet:'Account balance',wallet_admin:'User balances & manual credits',tax_analyst_admin:'Tax analyst management',tax_filing:'Federal return workspaces',attendance:"Employee clock & payroll statements",platform_attendance:"Workforce platform controls",commerce_admin:'Commerce dashboard',subscription_plans:'Subscription plans',subscriptions_admin:'Subscription management',payment_gateways:'Payment gateways',store_admin:'Store settings',coupons:'Coupon management',tax_amendments:'Amended tax preparation',tax_services:'Tax services & payment',tax_analyst:'Tax analyst',tax_preparation:'Tax preparation',tax_return_2026:'Tax returns — current & prior years',locale_settings:'Language & currency',provider_keys:'Provider provisioning & keys',user_manual:'User manual',support_center:'Support center & tickets',marketplace:'Service marketplace',market_orders:'Marketplace orders',market_services:'Purchased services',market_admin:'Marketplace administration',dashboard:'Business dashboard',super_admin:'Super admin',tenants:'Business workspaces',time:'Time sheets',leave:'Leave requests',payroll:'Gross pay worksheet',payroll_processing:'Provider payroll',bank_connections:'Bank connections & CSV',efile:'E-filing requests',jobs:'Processing jobs',recurring:'Recurring schedules',help:'Feature guide',financial_statements:'Financial statements',tax_organizer:'Tax organizer',capabilities:'Capability catalog',watchdog:'Watchdog events & reports',deployment:'Deployment & commissioning',downloads:'Mobile downloads'};
 function pageLabel(page){return t(navLabels[page]||title(page))}
 function isAdmin(){return ['admin','super_admin'].includes(userRole)}
 function availablePage(page){
+ if(contractsOnlyAccount)return ['contracting_opportunities','contract_partners','business_contracts','wallet','locale_settings'].includes(page);
  if(taxOnlyAccount)return ['communications','ai_chat','cashout','wallet','tax_filing','tax_amendments','tax_preparation','tax_return_2026','tax_analyst','tax_services','marketplace','market_orders','market_services','locale_settings','support_center','user_manual'].includes(page);
  if(['registration_otp','user_events','platform_users','sam_admin','cashout_admin','wallet_admin','tax_analyst_admin','platform_attendance','super_admin','tenants','watchdog','deployment','market_admin','provider_keys','coupons','commerce_admin','subscription_plans','subscriptions_admin','payment_gateways','store_admin'].includes(page))return userRole==='super_admin';
  if(['attendance','users','integrations','bank_connections','tax_calculator','payroll_processing','efile','approvals','jobs','recurring'].includes(page))return isAdmin();
- if(['business_contracts','contracting_opportunities'].includes(page))return !taxOnlyAccount;
+ if(['business_contracts','contracting_opportunities','contract_partners'].includes(page))return !taxOnlyAccount;
  if(page==='payroll'&&userRole==='viewer')return false;return !!modules[page]||['communications','ai_chat','cashout','wallet','tax_filing','tax_amendments','tax_services','tax_analyst','tax_preparation','tax_return_2026','locale_settings','user_manual','support_center','marketplace','market_orders','market_services','dashboard','journals','reports','financial_statements','tax_organizer','capabilities','downloads','payroll','help'].includes(page);
 }
 function shortcuts(){try{return JSON.parse(localStorage.getItem(`oob-shortcuts-${currentUserId}-${currentTenantId}`)||'[]').filter(availablePage)}catch{return []}}
 function navigationButton(page){if(page==='tax_preparation')return `<details open class="tax-prep-menu"><summary>${esc(pageLabel(page))}</summary><button type="button" data-page="tax_preparation">${esc(pageLabel(page))}</button><button type="button" data-page="tax_return_2026">${esc(pageLabel('tax_return_2026'))}</button><div class="tax-prep-menu"><button type="button" data-page="tax_analyst">Tax analyst</button><button type="button" data-page="tax_filing">Federal return workspaces</button><button type="button" data-page="tax_amendments">Amended tax preparation</button></div></details>`;return `<button type="button" data-page="${page}" title="${esc(pageLabel(page))}">${esc(pageLabel(page))}</button>`}
 function buildNavigation(me){
+ contractsOnlyAccount=me.tenant.service_mode==='contracts_only'&&me.role!=='super_admin';
  taxOnlyAccount=me.tenant.service_mode==='tax_only'&&me.role!=='super_admin';
  currentUserId=me.id;currentTenantId=me.tenant.id;
  const saved=shortcuts();
@@ -38,7 +40,7 @@ function buildNavigation(me){
  document.querySelector('#workspace-tools').hidden=false;
  document.querySelector('#account-summary').textContent=me.email+' · '+title(me.role);refreshWalletBadge();
  document.querySelector('#quick-create').innerHTML='<option value="">+ Create…</option>'+(userRole==='viewer'?[]:['invoices','bills','customers','vendors','expenses','employees','tasks','projects']).map(p=>`<option value="${p}">${esc(title(p))}</option>`).join('');
- document.querySelector('#quick-create').hidden=taxOnlyAccount||userRole==='viewer';
+ document.querySelector('#quick-create').hidden=taxOnlyAccount||contractsOnlyAccount||userRole==='viewer';
 }
 function wireWorkspaceActions(){
  document.querySelector('#nav-toggle').onclick=()=>document.body.classList.toggle('nav-open');
