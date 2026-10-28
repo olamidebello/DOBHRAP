@@ -1,0 +1,44 @@
+---
+- name: Repair approved Fonwuka duplicate login without rebuilding the application
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require live execution
+      ansible.builtin.assert:
+        that: not ansible_check_mode
+        fail_msg: This account repair cannot run in check mode.
+    - name: Prepare root-owned repair tools
+      ansible.builtin.file:
+        path: /usr/local/lib/dobhrap-repairs
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install fixed approved account repair
+      ansible.builtin.copy:
+        src: files/repair-fonwuka-login.py
+        dest: /usr/local/lib/dobhrap-repairs/repair-fonwuka-login.py
+        owner: root
+        group: root
+        mode: '0644'
+    - name: Remove suspended duplicate and retain active user credentials
+      ansible.builtin.command:
+        argv:
+          - systemd-run
+          - --quiet
+          - --wait
+          - --pipe
+          - --collect
+          - --property=User=dobhrap-app
+          - --property=Group=dobhrap-app
+          - --property=EnvironmentFile=/etc/dobhrap.env
+          - --property=WorkingDirectory=/opt/dobhrap/current
+          - --property=UMask=0077
+          - /opt/dobhrap/current/venv/bin/python
+          - /usr/local/lib/dobhrap-repairs/repair-fonwuka-login.py
+      register: login_repair
+      changed_when: (login_repair.stdout | from_json).changed | bool
+    - name: Report verified account repair
+      ansible.builtin.debug:
+        msg: '{{ login_repair.stdout | from_json }}'
