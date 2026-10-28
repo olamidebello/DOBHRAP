@@ -75,6 +75,8 @@ def dispatch(path,method,body,c,user,tid):
   a.audit(c,owner,'AI contracting draft saved '+row['id']);return {'ai':result,'saved':True}
  if route in ('approve','submission','confirm-submitted'):
   row,data=business.proposal(c,tid,body.get('id'))
+  _,source_fingerprint=contract_details.reviewed_sources(c,tid,data['notice_id'],owner)
+  if data.get('source_fingerprint')!=source_fingerprint:raise a.ServiceError('Sources or profile changed; complete the current analysis and prepare a new proposal',409)
   if row['owner']!=owner:raise a.ServiceError('Only the draft owner can approve or submit',403)
   if row['revision']!=body.get('revision'):raise a.ServiceError('Proposal changed; reopen it',409)
   if route=='approve':

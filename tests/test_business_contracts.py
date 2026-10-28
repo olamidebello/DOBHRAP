@@ -3,6 +3,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import app,advanced as a,business_contracts as business
 import tests.test_tenants as fixtures
+from tests.contract_source_fixtures import seed_review
 class BusinessContractsTests(unittest.TestCase):
  setUp=fixtures.TenantTests.setUp
  tearDown=fixtures.TenantTests.tearDown
@@ -38,6 +39,7 @@ class BusinessContractsTests(unittest.TestCase):
   tid,client,csrf=self.account()
   self.request('/api/business/profile',{'revision':0,'profile':{'legal_name':'Example','ein':'123456789','contact_email':'secret@example.com','capabilities':'Networking'}},client,csrf)
   with app.connect() as c:c.execute('INSERT INTO business_opportunities VALUES(?,?,?,?)',(tid,'a'*32,a.seal({'notice_id':'a'*32,'title':'Network project','url':'https://sam.gov/opp/'+'a'*32+'/view'}),0))
+  with app.connect() as c:seed_review(c,tid,c.execute("SELECT id FROM users WHERE email='contracts@example.com'").fetchone()[0])
   r=self.request('/api/business/proposal-create',{'notice_id':'a'*32},client,csrf);prompt=self.request('/api/business/proposal-prompt',{'id':r['id'],'requirements':'Deliver support'},client,csrf)['prompt'];self.assertNotIn('123456789',prompt);self.assertNotIn('secret@example.com',prompt);self.assertIn('Do not invent',prompt)
   root,token=self.login('platform@example.com','platform-password-1234')
   with self.assertRaises(HTTPError):self.request('/api/business/proposal-save',{'id':r['id'],'revision':1,'text':'wrong tenant'},root,token)

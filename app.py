@@ -238,7 +238,32 @@ class Handler(BaseHTTPRequestHandler):
   try:
    if self.command!='GET' and maintenance_active():raise advanced.ServiceError('Database migration in progress. Please try again shortly.',503)
    path=self.path.split('?')[0]; body={}
-   if self.command=='GET' and path in ('/','/setup','/setup/','/register','/register/','/government-contracts','/government-contracts/','/contracting-opportunities','/contracting-opportunities/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock','/forgot-password','/reset-password'):
+   if self.command=='GET' and path=='/':
+    b=Path(__file__).with_name('home.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(b)));self.send_header('Cache-Control','no-store');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(b);return
+   if self.command=='GET' and path in ('/assets/platform-demo.mp4','/assets/platform-demo-poster.png','/assets/platform-demo.vtt'):
+    asset=Path(__file__).with_name('assets')/path.rsplit('/',1)[1];size=asset.stat().st_size;start=0;end=size-1;status=200
+    range_header=self.headers.get('Range')
+    if range_header:
+     import re
+     match=re.fullmatch(r'bytes=(\d*)-(\d*)',range_header)
+     if match and (match[1] or match[2]):
+      if not match[1]:start=max(0,size-int(match[2]))
+      else:start=int(match[1]);end=min(size-1,int(match[2])) if match[2] else size-1
+     else:start=size
+     if start>=size or end<start:
+      self.send_response(416);self.send_header('Content-Range','bytes */'+str(size));self.send_header('Content-Length','0');self.end_headers();return
+     status=206
+    self.send_response(status);self.send_header('Content-Type','video/mp4' if path.endswith('.mp4') else 'text/vtt; charset=utf-8' if path.endswith('.vtt') else 'image/png');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1));self.send_header('Cache-Control','public, max-age=3600');self.send_header('X-Content-Type-Options','nosniff')
+    if status==206:self.send_header('Content-Range','bytes '+str(start)+'-'+str(end)+'/'+str(size))
+    self.end_headers()
+    with asset.open('rb') as stream:
+     stream.seek(start);remaining=end-start+1
+     while remaining:
+      chunk=stream.read(min(65536,remaining))
+      if not chunk:break
+      self.wfile.write(chunk);remaining-=len(chunk)
+    return
+   if self.command=='GET' and path in ('/login','/workspace','/setup','/setup/','/register','/register/','/government-contracts','/government-contracts/','/contracting-opportunities','/contracting-opportunities/','/tax-services','/tax-services/','/downloads','/downloads/','/tax-record-upload','/employee-clock','/forgot-password','/reset-password'):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com https://cdn.jsdelivr.net; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return

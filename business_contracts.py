@@ -135,8 +135,10 @@ def dispatch(path,method,body,c,user,tid):
  if route=='proposal-create':
   opportunity=c.execute('SELECT payload FROM business_opportunities WHERE tenant_id=? AND notice_id=?',(tid,body.get('notice_id'))).fetchone()
   if not opportunity:raise a.ServiceError('Select a saved opportunity in this workspace',404)
+  import contract_details
+  source_report,source_fingerprint=contract_details.reviewed_sources(c,tid,body.get('notice_id'),user['id'])
   opp=a.unseal(opportunity['payload']);pid=str(uuid.uuid4());text='DRAFT — HUMAN REVIEW REQUIRED\n'+p.get('legal_name',tenant['name'])+'\n'+opp['title']+'\nSource: '+opp['url']+'\n\nExecutive summary\n[Describe the proposed approach]\n\nTechnical approach\n[Map every solicitation requirement to evidence]\n\nStaffing and schedule\n[Confirm named personnel and availability]\n\nPast performance\n'+p.get('past_performance','[Add verified references]')+'\n\nPricing\n[Insert reviewed pricing; no amounts inferred]\n\nCompliance checklist\n[Verify attachments, amendments, submission instructions, certifications and deadline]'
-  data={'notice_id':opp['notice_id'],'title':opp['title'],'text':text,'status':'draft','source':opp['url']};c.execute('INSERT INTO business_proposals VALUES(?,?,?,?,?,?)',(pid,tid,user['id'],1,a.seal(data),int(time.time())));return {'id':pid,**data,'revision':1}
+  data={'analysis_report':source_report,'source_fingerprint':source_fingerprint,'notice_id':opp['notice_id'],'title':opp['title'],'text':text,'status':'draft','source':opp['url']};c.execute('INSERT INTO business_proposals VALUES(?,?,?,?,?,?)',(pid,tid,user['id'],1,a.seal(data),int(time.time())));return {'id':pid,**data,'revision':1}
  if route in ('proposal-save','proposal-prompt','proposal-delete'):
   row,data=proposal(c,tid,body.get('id'))
   if route=='proposal-delete':c.execute('DELETE FROM business_proposals WHERE id=? AND tenant_id=?',(row['id'],tid));return {'ok':True}
@@ -146,6 +148,9 @@ def dispatch(path,method,body,c,user,tid):
    if body.get('revision')!=row['revision']:raise a.ServiceError('Proposal changed; reload',409)
    data['text']=text;data['status']='reviewed' if body.get('reviewed') is True else 'draft'
    c.execute('UPDATE business_proposals SET payload=?,revision=revision+1,updated=? WHERE id=? AND tenant_id=?',(a.seal(data),int(time.time()),row['id'],tid));a.audit(c,user['id'],'Business proposal saved '+row['id']);return {'ok':True}
+  import contract_details
+  source_report,source_fingerprint=contract_details.reviewed_sources(c,tid,data['notice_id'],user['id'])
+  if data.get('source_fingerprint')!=source_fingerprint:raise a.ServiceError('Sources or profile changed; review analysis and create a new proposal',409)
   requirements=body.get('requirements','')
   if not isinstance(requirements,str) or len(requirements)>6000:raise a.ServiceError('Paste up to 6,000 characters of relevant solicitation requirements')
   mode=body.get('mode','full')

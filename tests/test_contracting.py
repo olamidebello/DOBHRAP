@@ -4,6 +4,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import app,advanced as a,business_contracts as business,contracting
 import tests.test_tenants as fixtures
+from tests.contract_source_fixtures import seed_review
 
 class ContractingTests(unittest.TestCase):
  setUp=fixtures.TenantTests.setUp
@@ -16,6 +17,7 @@ class ContractingTests(unittest.TestCase):
   with app.connect() as c:
    user=dict(c.execute("SELECT * FROM users WHERE email='bids@example.com'").fetchone())
    c.execute('INSERT INTO business_opportunities VALUES(?,?,?,?)',(tid,'a'*32,a.seal({'notice_id':'a'*32,'title':'Network support','url':'https://sam.gov/opp/'+'a'*32+'/view'}),0))
+   seed_review(c,tid,user['id'])
   return tid,user,client,csrf
  def test_watch_owner_and_workspace_isolation(self):
   tid,user,client,csrf=self.account()
@@ -39,6 +41,7 @@ class ContractingTests(unittest.TestCase):
    contracting.process(app);self.assertEqual(search.call_count,2)
  def test_approval_and_submission_require_exact_reviewed_draft(self):
   tid,user,client,csrf=self.account()
+  with app.connect() as c:seed_review(c,tid,user['id'])
   r=self.request('/api/business/proposal-create',{'notice_id':'a'*32},client,csrf)
   with self.assertRaises(HTTPError):self.request('/api/contracting/submission',{'id':r['id'],'revision':1},client,csrf)
   self.request('/api/business/proposal-save',{'id':r['id'],'revision':1,'text':'Verified proposed approach, staffing and pricing','reviewed':True},client,csrf)
@@ -50,6 +53,7 @@ class ContractingTests(unittest.TestCase):
  def test_ai_direct_draft_uses_redacted_profile_and_preserves_owner(self):
   tid,user,client,csrf=self.account()
   self.request('/api/business/profile',{'profile':{'legal_name':'Example','naics':'541512','capabilities':'Support','ein':'123456789','contact_email':'private@example.com'},'revision':0},client,csrf)
+  with app.connect() as c:seed_review(c,tid,user['id'])
   r=self.request('/api/business/proposal-create',{'notice_id':'a'*32},client,csrf)
   with app.connect() as c:
    body={'id':r['id'],'revision':1,'requirements':'Support contract','mode':'full','consent':True}

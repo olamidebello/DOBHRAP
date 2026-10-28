@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Olamide Olatayo Bello Business",
   "short_name": "OOB Business",
-  "start_url": "/",
+  "start_url": "/workspace",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f3f6f8",

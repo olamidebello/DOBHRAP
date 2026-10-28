@@ -37,7 +37,7 @@ class DetailsTests(unittest.TestCase):
   with self.assertRaises(HTTPError):self.request('/api/contracting/details',{'notice_id':'a'*32},root,token)
  def test_report_quote_saved_and_used_by_draft(self):
   tid,user,client,csrf=self.account()
-  data={'notice':{'title':'Support','noticeId':'a'*32},'description':'Provide network support','attachments':[{'name':'scope.txt','text':'Staff coverage required','complete':True}],'warnings':[]}
+  data={'coverage_complete':True,'attachment_count':1,'notice':{'title':'Support','noticeId':'a'*32},'description':'Provide network support','attachments':[{'name':'scope.txt','text':'Staff coverage required','complete':True}],'warnings':[]}
   with app.connect() as c:
    c.execute('INSERT INTO contracting_details VALUES(?,?,?,?,?)',(tid,'a'*32,'ready',a.seal(data),1))
    c.execute('INSERT INTO business_profiles VALUES(?,?,?,?)',(tid,1,a.seal({'legal_name':'Example','ein':'secret-ein','contact_email':'private@example.com','capabilities':'Network support'}),1))
@@ -74,3 +74,23 @@ class DetailsTests(unittest.TestCase):
   self.assertEqual(stages,['notice','download','extraction'])
   r=self.request('/api/contracting/details',{'notice_id':'a'*32},client,csrf)
   self.assertEqual(r['progress']['stage'],'ready');self.assertEqual(r['progress']['completed'],1)
+
+ def test_incomplete_sources_block_report_and_all_draft_paths(self):
+  tid,user,client,csrf=self.account()
+  data={'notice':{'title':'Support','noticeId':'a'*32},'description':'Scope','attachments':[{'name':'missing.pdf','text':'','complete':False,'notes':['restricted']}],'attachment_count':1,'coverage_complete':False}
+  with app.connect() as c:
+   c.execute('INSERT INTO contracting_details VALUES(?,?,?,?,?)',(tid,'a'*32,'ready',a.seal(data),1))
+   c.execute('INSERT INTO contracting_reports VALUES(?,?,?,?,?)',(user['id'],tid,'a'*32,a.seal({'complete':True,'sections':{'0':{'text':'Old summary'}}}),1))
+  response=self.request('/api/contracting/details',{'notice_id':'a'*32},client,csrf);self.assertEqual(response['report'],{})
+  with patch.object(d.ai_services,'quote') as quote,patch.object(d.ai_services,'chat') as chat:
+   for path in ('/api/contracting/details-quote','/api/contracting/details-analyze','/api/contracting/details-draft','/api/business/proposal-create'):
+    with self.assertRaises(HTTPError) as error:self.request(path,{'notice_id':'a'*32},client,csrf)
+    self.assertEqual(error.exception.code,409)
+   quote.assert_not_called();chat.assert_not_called()
+  with app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM business_proposals').fetchone()[0],0)
+ def test_attachment_inventory_mismatch_blocks_analysis(self):
+  tid,user,client,csrf=self.account()
+  data={'notice':{'title':'Support'},'description':'Complete text','attachments':[],'attachment_count':2,'coverage_complete':True}
+  with app.connect() as c:c.execute('INSERT INTO contracting_details VALUES(?,?,?,?,?)',(tid,'a'*32,'ready',a.seal(data),1))
+  with self.assertRaises(HTTPError) as error:self.request('/api/contracting/details-quote',{'notice_id':'a'*32},client,csrf)
+  self.assertEqual(error.exception.code,409)
