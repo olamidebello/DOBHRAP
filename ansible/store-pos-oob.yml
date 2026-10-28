@@ -90,7 +90,21 @@
         return_content: true
         status_code: 200
       register: pos_connection
-      failed_when: not pos_connection.json.enabled or pos_connection.json.issuer != 'https://olamideolatayobello.com' or pos_connection.json.audience != 'https://pos.africandroid.com'
+      failed_when: false
+    - name: Require reachable trusted POS identity endpoint
+      ansible.builtin.assert:
+        that:
+          - pos_connection.status | default(-1) == 200
+          - (pos_connection.json | default({})).get('enabled', false) | bool
+          - (pos_connection.json | default({})).get('issuer', '') == 'https://olamideolatayobello.com'
+          - (pos_connection.json | default({})).get('audience', '') == 'https://pos.africandroid.com'
+        fail_msg: >-
+          POS connection is not ready. HTTP status={{ pos_connection.status | default(-1) }};
+          diagnostic={{ pos_connection.msg | default('Unexpected identity response') }}.
+          Ensure pos.africandroid.com DNS points to the actual POS host (154.16.170.86 for this installation),
+          deploy Global POS with its storefront-olamidepanel.yml, and retain valid HTTPS.
+          Business Suite deployment is complete; storefront connection remains pending.
+          No DNS records were changed by this playbook.
     - name: Explain publication controls
       ansible.builtin.debug:
         msg: Business storefront registration now queues a private tenant draft. Owners open Store & POS to add branding, stock and verified location, then publish. Enable POS, restaurant and marketplace features through Global POS administration as appropriate. Payments remain separately configured. Linked access expires after 15 minutes and must be reopened from Business Suite.
