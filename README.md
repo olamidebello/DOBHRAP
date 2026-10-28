@@ -446,3 +446,16 @@ Summary/report quoting, analysis and all proposal-creation paths now require a r
 ### Contract fit and delivery assessment
 
 Contract reports focus on the solicitation and the user's practical potential to perform it. Each source segment assesses scope/deliverables, required capability versus profile evidence, staffing/resources/schedule readiness, commercial/compliance risks, potential partner roles, a conditional pursuit recommendation, a prioritized action plan and proposal strategy. Profile inputs include bounded capability and past-performance descriptions, staffing, regions, certifications, insurance, entity type and industry codes; EIN and profile contact fields remain excluded. Missing profile facts are Unknown, not evidence of incapacity. Confirmed gaps require explicit conflicting evidence. No unsupported award probabilities, numeric scores, pricing or credentials are invented. Segment findings remain provisional pending cross-document review. The revised report fingerprint invalidates older generic reports; source-completeness and pricing/consent gates still apply.
+
+### Business storefront registration and Store & POS
+
+Business registration now offers **Business with storefront & POS**. Country, currency and timezone are required; each opted-in workspace queues a private tenant storefront in the separately deployed Global POS application. Store & POS opens the merchant builder, POS Only or restaurant interface through a short-lived signed identity handoff. Personal and contracting-only accounts do not receive merchant administration. Passwords and payment credentials are not transferred.
+
+Deploy Global POS first using its `ansible/storefront-olamidepanel.yml`, then run:
+
+```bash
+git pull --ff-only
+ansible-playbook -i 'dobhrap,' -c local ansible/store-pos-oob.yml
+```
+
+This preserves the dedicated app port and existing business data through the standard repair/deploy workflow, installs a bounded storefront provisioning timer, and provisions a persistent first-party signing key. Drafts stay private until the owner supplies details and stock and explicitly publishes. Global POS platform features and payment gateways require separate administrator configuration. See the POS repository's `STOREFRONTS.md` for operational limits and the remaining feature roadmap. This playbook does not deploy the POS repository or claim every proposed retail/restaurant capability is available.

@@ -11,6 +11,7 @@ import ai_services
 import communications
 import contracting
 import business_contracts
+import business_pos
 import user_management
 import user_data
 import user_events
@@ -94,7 +95,7 @@ def register_workspace(c,body,transaction_started=False):
  mode=body.get('service_mode','business')
  account_type=body.get('account_type')
  if account_type is not None:
-  if account_type not in ('personal','business','government_contracts'):raise ValueError('Choose Personal, Business or Government contracts account type')
+  if account_type not in ('personal','business','government_contracts','storefront'):raise ValueError('Choose Personal, Business, Storefront or Government contracts account type')
   expected='tax_only' if account_type=='personal' else 'contracts_only' if account_type=='government_contracts' else 'business'
   if 'service_mode' in body and mode!=expected:raise ValueError('Account type does not match requested services')
   mode=expected
@@ -105,6 +106,7 @@ def register_workspace(c,body,transaction_started=False):
  if not 14<=len(p)<=1024 or p!=body.get('confirm_password'):raise ValueError('Use matching passwords of 14 to 1024 characters')
  if c.execute('SELECT 1 FROM users WHERE lower(email)=?',(email,)).fetchone():raise ValueError('An account already uses that email')
  tid=c.execute('INSERT INTO tenants(name,service_mode) VALUES(?,?)',(company,mode)).lastrowid
+ business_pos.registration(c,tid,body,mode)
  if database.mysql_enabled():
   with database.connect(tenant_id=tid,create=True) as tenant:initialize_business(tenant)
  else:
@@ -139,6 +141,7 @@ def init():
   ai_services.initialize(c)
   communications.initialize(c)
   business_contracts.initialize(c)
+  business_pos.initialize(c)
   contracting.initialize(c)
   user_management.initialize(c)
   user_events.initialize(c)
@@ -238,6 +241,8 @@ class Handler(BaseHTTPRequestHandler):
   try:
    if self.command!='GET' and maintenance_active():raise advanced.ServiceError('Database migration in progress. Please try again shortly.',503)
    path=self.path.split('?')[0]; body={}
+   if self.command=='GET' and path in ('/pos-only','/restaurant-pos'):
+    self.send_response(302);self.send_header('Location',business_pos.origin()+('/restaurant.html' if path=='/restaurant-pos' else '/pos.html'));self.send_header('Cache-Control','no-store');self.end_headers();return
    if self.command=='GET' and path=='/':
     b=Path(__file__).with_name('home.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(b)));self.send_header('Cache-Control','no-store');self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(b);return
    if self.command=='GET' and path in ('/assets/platform-demo.mp4','/assets/platform-demo-poster.png','/assets/platform-demo.vtt'):
@@ -267,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
     b=Path(__file__).with_name('index.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com https://cdn.jsdelivr.net; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/assets/oob-logo.png','/assets/app-icon-192.png','/assets/app-icon-512.png'):
     b=Path(__file__).with_name('assets').joinpath(path.rsplit('/',1)[1]).read_bytes(); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','public, max-age=3600'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b); return
-   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/contracting.js','/contract-details.js','/contract-partners.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
+   if self.command=='GET' and path in ('/advanced.js','/workspace.js','/support-ui.js','/international.js','/tax-preparation.js','/tax-analyst.js','/tax-management.js','/ai-services.js','/communications.js','/contracting.js','/contract-details.js','/contract-partners.js','/store-pos.js','/business-contracts.js','/user-management.js','/user-events.js','/registration-otp.js','/wallet.js','/cashout.js','/attendance.js','/password-reset.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes(); self.send_response(200); self.send_header('Content-Type','text/javascript'); self.end_headers(); self.wfile.write(b); return
    if self.command=='GET' and path in ('/manifest.webmanifest','/service-worker.js'):
     b=Path(__file__).with_name(path.lstrip('/')).read_bytes();self.send_response(200);self.send_header('Content-Type','application/manifest+json' if path.endswith('webmanifest') else 'text/javascript');self.send_header('Cache-Control','no-cache');self.end_headers();self.wfile.write(b);return
@@ -406,6 +411,8 @@ class Handler(BaseHTTPRequestHandler):
     if cashout_result is not None:c.commit();self.reply(200,cashout_result);return
     contracting_result=contracting.dispatch(path,self.command,body,c,u,tenant_id)
     if contracting_result is not None:c.commit();self.reply(200,contracting_result);return
+    pos_result=business_pos.dispatch(path,self.command,body,c,u,tenant_id)
+    if pos_result is not None:c.commit();self.reply(200,pos_result);return
     business_result=business_contracts.dispatch(path,self.command,body,c,u,tenant_id)
     if business_result is not None:c.commit();self.reply(200,business_result);return
     comms_result=communications.dispatch(path,self.command,body,c,u,tenant_id)

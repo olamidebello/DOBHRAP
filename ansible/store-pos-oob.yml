@@ -1,0 +1,96 @@
+---
+- import_playbook: repair-oob.yml
+  vars:
+    oob_hardfix: true
+- name: Connect business registration to tenant storefronts
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require the separately deployed POS service
+      ansible.builtin.command:
+        argv: [systemctl, is-active, pos-control.service]
+      changed_when: false
+    - name: Prepare protected public verification key directory
+      ansible.builtin.file:
+        path: /etc/pos-control
+        state: directory
+        owner: root
+        group: pos-control
+        mode: '0750'
+    - name: Generate a persistent first-party signing key and matching public key
+      ansible.builtin.command:
+        argv:
+          - /opt/dobhrap/current/venv/bin/python
+          - -c
+          - |
+            import os,pwd,grp
+            from pathlib import Path
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            from cryptography.hazmat.primitives.serialization import Encoding,PrivateFormat,PublicFormat,NoEncryption,load_pem_private_key
+            path=Path('/etc/dobhrap-pos-signing.key');public=Path('/etc/pos-control/suite-pos-public.key');changed=False
+            if not path.exists():
+                descriptor=os.open(str(path),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(descriptor,'wb') as target:target.write(Ed25519PrivateKey.generate().private_bytes(Encoding.PEM,PrivateFormat.PKCS8,NoEncryption()))
+                changed=True
+            key=load_pem_private_key(path.read_bytes(),None)
+            if not isinstance(key,Ed25519PrivateKey):raise SystemExit('Unexpected signing key type')
+            os.chown(path,0,grp.getgrnam('dobhrap-app').gr_gid);os.chmod(path,0o640)
+            value=key.public_key().public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+            if not public.exists() or public.read_bytes()!=value:
+                temp=public.with_suffix('.tmp');temp.write_bytes(value);os.chmod(temp,0o644);os.replace(temp,public);changed=True
+            print('changed' if changed else 'unchanged')
+      register: pos_connection_keys
+      changed_when: "pos_connection_keys.stdout | trim == 'changed'"
+    - name: Install bounded storefront provisioning worker
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-storefront-provision.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Provision opted-in tenant storefront drafts
+          After=network.target pos-control.service
+          [Service]
+          Type=oneshot
+          User=dobhrap-app
+          Group=dobhrap-app
+          WorkingDirectory=/opt/dobhrap/current
+          EnvironmentFile=/etc/dobhrap.env
+          ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/business_pos_worker.py
+          TimeoutStartSec=90
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          ReadWritePaths=/var/lib/dobhrap
+          UMask=0077
+    - name: Schedule opted-in storefront provisioning
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/oob-storefront-provision.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Prepare pending business storefronts
+          [Timer]
+          OnBootSec=60
+          OnUnitInactiveSec=60
+          Unit=oob-storefront-provision.service
+          [Install]
+          WantedBy=timers.target
+    - name: Enable storefront queue
+      ansible.builtin.systemd:
+        name: oob-storefront-provision.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Verify public POS identity connection configuration
+      ansible.builtin.uri:
+        url: https://pos.africandroid.com/api/federation/config
+        use_proxy: false
+        return_content: true
+        status_code: 200
+      register: pos_connection
+      failed_when: not pos_connection.json.enabled or pos_connection.json.issuer != 'https://olamideolatayobello.com' or pos_connection.json.audience != 'https://pos.africandroid.com'
+    - name: Explain publication controls
+      ansible.builtin.debug:
+        msg: Business storefront registration now queues a private tenant draft. Owners open Store & POS to add branding, stock and verified location, then publish. Enable POS, restaurant and marketplace features through Global POS administration as appropriate. Payments remain separately configured. Linked access expires after 15 minutes and must be reopened from Business Suite.
