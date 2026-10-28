@@ -7,6 +7,10 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Install bounded document OCR tools
+      ansible.builtin.apt:
+        name: [poppler-utils, tesseract-ocr]
+        state: present
     - name: Install restricted opportunity search worker
       ansible.builtin.copy:
         dest: /etc/systemd/system/oob-contracting.service
@@ -22,7 +26,7 @@
           WorkingDirectory=/opt/dobhrap/current
           EnvironmentFile=/etc/dobhrap.env
           ExecStart=/opt/dobhrap/current/venv/bin/python /opt/dobhrap/current/contracting_worker.py
-          TimeoutStartSec=180
+          TimeoutStartSec=600
           NoNewPrivileges=true
           ProtectHome=true
           ProtectSystem=strict
@@ -60,6 +64,14 @@
         return_content: true
       register: contracting_gui
       failed_when: "'contracting/generate' not in contracting_gui.content"
+    - name: Verify public contract details GUI
+      ansible.builtin.uri:
+        url: https://olamideolatayobello.com/contract-details.js
+        use_proxy: false
+        status_code: 200
+        return_content: true
+      register: details_gui
+      failed_when: "'agGrid.createGrid' not in details_gui.content"
     - name: Report activation steps
       ansible.builtin.debug:
         msg:
