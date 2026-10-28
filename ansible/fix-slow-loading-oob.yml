@@ -1,0 +1,31 @@
+---
+- name: Diagnose and repair business suite loading
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require live execution
+      ansible.builtin.assert:
+        that: not ansible_check_mode
+    - name: Install measurement prerequisites
+      ansible.builtin.apt:
+        name: [curl, python3]
+        state: present
+    - name: Prepare repair directory
+      ansible.builtin.file:
+        path: /usr/local/lib/dobhrap-repairs
+        state: directory
+        mode: '0755'
+    - name: Install bounded loading repair
+      ansible.builtin.copy:
+        src: files/repair-loading.py
+        dest: /usr/local/lib/dobhrap-repairs/repair-loading.py
+        mode: '0644'
+    - name: Measure loading and apply validated Nginx optimizations
+      ansible.builtin.command:
+        argv: [python3, /usr/local/lib/dobhrap-repairs/repair-loading.py]
+      register: loading
+      changed_when: (loading.stdout | from_json).changed_files | length > 0
+    - name: Report timings and retained backup
+      ansible.builtin.debug:
+        msg: '{{ loading.stdout | from_json }}'

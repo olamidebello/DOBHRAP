@@ -40,7 +40,7 @@ def configuration(port, addresses):
   text+=' server_name '+DOMAIN+';\n'
   if network=='80':text+=' return 301 https://'+DOMAIN+'$request_uri;\n}\n';continue
   text+=' ssl_certificate '+cert+'/fullchain.pem;\n ssl_certificate_key '+cert+'/privkey.pem;\n'
-  text+=' client_max_body_size 25m;\n add_header Cache-Control "no-store" always;\n add_header Clear-Site-Data \'"cache"\' always;\n'
+  text+=' client_max_body_size 25m;\n add_header Cache-Control "no-store" always;\n'
   for path in ('/sw.js','/service-worker.js'):
    text+=" location = "+path+" { default_type application/javascript; return 200 '"+clear+"'; }\n"
   text+=' location / { proxy_pass http://127.0.0.1:'+str(port)+';\n proxy_set_header Host $host;\n proxy_set_header X-Real-IP $remote_addr;\n proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n proxy_set_header X-Forwarded-Proto $scheme;\n }\n}\n'
