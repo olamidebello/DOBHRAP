@@ -538,6 +538,11 @@
       ansible.builtin.systemd:
         name: nginx
         state: reloaded
+    - name: Repair exact-host listener precedence before local and public TLS verification
+      ansible.builtin.command:
+        argv: [python3, "{{ playbook_dir }}/hardfix-routing.py"]
+      when: oob_hardfix | default(false) | bool
+      changed_when: true
     - name: Verify local HTTPS with the correct hostname and certificate
       ansible.builtin.command:
         argv: [curl, --fail, --silent, --show-error, --noproxy, '*', --resolve, "{{ domain }}:443:127.0.0.1", "https://{{ domain }}/api/identity"]
@@ -556,11 +561,6 @@
         startup_probe.rc != 0 or
         startup_probe.stdout_lines[-1] != item.status or
         item.field not in (startup_probe.stdout_lines[:-1] | join('\n') | from_json)
-    - name: Repair exact-host listener precedence before public verification
-      ansible.builtin.command:
-        argv: [python3, "{{ playbook_dir }}/hardfix-routing.py"]
-      when: oob_hardfix | default(false) | bool
-      changed_when: true
     - name: Verify public database-backed startup API
       ansible.builtin.uri:
         url: "https://{{ domain }}/api/setup/status"

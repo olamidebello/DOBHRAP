@@ -56,6 +56,18 @@ def verify(address=None):
  setup=json.loads(run(base+['https://'+DOMAIN+'/api/setup/status']))
  if setup.get('required') is not False:raise ValueError('Existing business setup not found')
 
+
+def wait_for_verification(address=None, attempts=12):
+ # Nginx reload is asynchronous: old workers can briefly serve the old certificate.
+ # Each attempt keeps certificate and application identity validation enabled.
+ for attempt in range(attempts):
+  try:
+   verify(address)
+   return
+  except (subprocess.SubprocessError, ValueError):
+   if attempt+1==attempts:raise
+   time.sleep(1)
+
 def main():
  ROOT.mkdir(mode=0o700,parents=True,exist_ok=True);backup=ROOT/str(time.time_ns());backup.mkdir(mode=0o700)
  report={'verified':False,'backup':str(backup)};originals={};existed=DEST.exists();old=DEST.read_text() if existed else None;started=False
@@ -78,13 +90,12 @@ def main():
   after=run(['nginx','-T'])
   if '# configuration file '+str(DEST)+':' not in after:raise ValueError('conf.d is not loaded; configuration not activated')
   run(['nginx','-t']);run(['systemctl','reload','nginx'])
-  time.sleep(2)
-  verify('127.0.0.1')
+  wait_for_verification('127.0.0.1')
   # Verify each explicit IPv4 group too, not only the wildcard loopback listener.
   for addr in listeners(dump)['443']:
-   if ':' not in addr and addr!='0.0.0.0':verify(addr)
+   if ':' not in addr and addr!='0.0.0.0':wait_for_verification(addr)
   report['local_verified']=True
-  verify();report.update(verified=True,domain=DOMAIN,port=port)
+  wait_for_verification();report.update(verified=True,domain=DOMAIN,port=port)
  except Exception as error:
   report['error']=str(error) if isinstance(error,ValueError) else type(error).__name__
   # Keep locally verified repair if only public DNS/network access fails.
