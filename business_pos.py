@@ -4,9 +4,9 @@ from pathlib import Path
 import advanced as a
 
 ISSUER='https://olamideolatayobello.com'
-ALLOWED={'https://pos.africandroid.com','https://pos.africandroid.world'}
+ALLOWED={'https://pos.africandroid.world'}
 def origin():
- value=os.environ.get('GLOBALPOS_ORIGIN','https://pos.africandroid.com').rstrip('/')
+ value=os.environ.get('GLOBALPOS_ORIGIN','https://pos.africandroid.world').rstrip('/')
  if value not in ALLOWED:raise a.ServiceError('Configure an approved Global POS origin',503)
  return value
 
