@@ -1,0 +1,74 @@
+---
+- name: Pull and deploy Global POS before connecting Business Suite
+  hosts: dobhrap
+  become: true
+  gather_facts: true
+  vars:
+    storefront_server_ipv4: '154.16.170.86'
+    storefront_certificate_email: dobcalldemo@gmail.com
+  pre_tasks:
+    - name: Require live Debian hosting server
+      ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+          - ansible_distribution == 'Debian'
+          - ansible_distribution_major_version | int >= 12
+          - ansible_service_mgr == 'systemd'
+          - storefront_server_ipv4 is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+          - storefront_certificate_email is match('^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$')
+        fail_msg: Run on the live Debian hosting server with actual IPv4 and certificate contact settings.
+  tasks:
+    - name: Install source and deployment prerequisites
+      ansible.builtin.apt:
+        name: [git, ansible, ca-certificates]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Pull Global POS and run its verified world-domain deployment
+      ansible.builtin.command:
+        argv:
+          - ansible-pull
+          - -U
+          - https://github.com/olamidebello/pos.git
+          - -C
+          - main
+          - -d
+          - /opt/global-pos-deploy
+          - -i
+          - localhost,
+          - -c
+          - local
+          - ansible/storefront-olamidepanel.yml
+          - -e
+          - "{{ {'pos_public_ip': storefront_server_ipv4, 'pos_ssl_email': storefront_certificate_email} | to_json }}"
+      async: 3600
+      poll: 10
+      register: storefront_pos_deployment
+      changed_when: true
+      # The POS deploy verifies DNS, ACME, HTTPS and application identity and
+      # retains its existing configuration backups and deployment rollback.
+      # A failure stops here before rebuilding the Business Suite.
+
+- import_playbook: store-pos-oob.yml
+
+- name: Finish and report the storefront connection
+  hosts: dobhrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Process pending opted-in storefront registrations
+      ansible.builtin.systemd:
+        name: oob-storefront-provision.service
+        state: started
+    - name: Confirm storefront scheduling is active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, oob-storefront-provision.timer]
+      changed_when: false
+    - name: Report verified deployment and remaining owner setup
+      ansible.builtin.debug:
+        msg:
+          - 'Global POS hostname: https://pos.africandroid.world'
+          - 'Business Suite: https://olamideolatayobello.com'
+          - 'Open Store & POS after business sign-in. Registration with storefront selected queues a private tenant-owned draft.'
+          - 'Owners add store details, stock and branding before explicitly publishing. Platform feature flags and live payment gateways require separate configuration.'
+          - 'DNS must point to this server. This playbook does not modify DNS, remove unrelated vhosts, delete accounts or report every queued store as provisioned merely because a worker exited successfully.'
